@@ -1,5 +1,7 @@
 import json,pathlib,sqlite3,sys,tempfile,threading,unittest,urllib.request,urllib.error,io
 from urllib.parse import quote
+from contextlib import closing
+from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'数仓'))
 import db,db_eco,server,seed_eco
@@ -57,6 +59,72 @@ class ApiTests(unittest.TestCase):
         data=self.call('/api/eco')[1]
         self.assertEqual(next(x['value'] for x in data['params'] if x['id']=='safe.line'),'1234567')
         self.assertEqual(next(x['term_days'] for x in data['terms'] if x['customer']=='回归测试客户'),0)
+    def test_import_survives_initialization_and_reload(self):
+        rows=[{'交易日期':'2026-11-01','收支方向':'收','金额':100,'对方户名':'测试客户'}]
+        code, result=self.call('/api/import', {'kind':'flow','fileName':'synthetic.csv','rows':rows})
+        self.assertEqual(code,200,result)
+        seed_eco.seed_defaults()
+        saved=self.call('/api/rows')[1]['flow']
+        self.assertEqual(len(saved),1)
+        self.assertEqual(saved[0]['金额'],100)
+
+    def test_reset_requires_confirmation_and_preserves_data_when_cancelled(self):
+        db.save_flow([{'交易日期':'2026-11-01','收支方向':'收','金额':100,'对方户名':'测试客户'}])
+        code, result = self.call('/api/reset', {})
+        self.assertEqual(code, 400, result)
+        self.assertEqual(len(db.load_flow()), 1)
+
+    def test_reset_rejects_cross_origin_requests(self):
+        db_eco.params_save({'safe.line':'9999'})
+        code, result=self.call('/api/reset', {'confirm':'RESET_ALL'},
+                               headers={'Content-Type':'application/json','Origin':'http://127.0.0.1:9999'})
+        self.assertEqual(code,403,result)
+        self.assertEqual(db_eco.params_map()['safe.line'],'9999')
+
+    def test_reset_backs_up_everything_and_rejects_stale_page_writes(self):
+        db.save_flow([{'交易日期':'2026-11-01','收支方向':'收','金额':100,'对方户名':'测试客户'}])
+        db.save_manual({'2026-11-01|100|测试客户':{'l1':'管理费用'}})
+        db_eco.params_save({'safe.line':'9999'})
+        db_eco.terms_save([{'customer':'测试客户','term_days':0}])
+        db.save_rule('[{"id":"CUSTOM"}]')
+        pathlib.Path(server.UPLOAD_DIR).mkdir()
+        (pathlib.Path(server.UPLOAD_DIR)/'generated.txt').write_text('generated test data')
+        code, result = self.call('/api/reset', {'confirm':'RESET_ALL','browserState':{'eco.actor':'测试人员'}})
+        self.assertEqual(code, 200, result)
+        self.assertTrue(result['ok'])
+        self.assertEqual(db.load_flow(), [])
+        self.assertEqual(db.load_manual(), {})
+        self.assertEqual(db_eco.dict_all()['entities'], [])
+        self.assertEqual(db_eco.terms_load(), [])
+        self.assertEqual(db_eco.params_map()['safe.line'], '0')
+        self.assertIsNone(db.load_rule())
+        self.assertEqual(len(db_eco.tpl_list()), 2)
+        backup=pathlib.Path(result['backup'])
+        with closing(sqlite3.connect(backup/'warehouse.db')) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM ods_flow').fetchone()[0],1)
+        self.assertEqual((backup/'uploads'/'generated.txt').read_text(),'generated test data')
+        self.assertEqual(json.loads((backup/'browser-state.json').read_text(encoding='utf-8'))['eco.actor'],'测试人员')
+        self.assertFalse(pathlib.Path(server.UPLOAD_DIR).exists())
+        self.assertEqual(self.call('/api/params', {'params':{'safe.line':'9999'}})[0],409)
+        token=self.call('/api/rows')[1]['resetToken']
+        self.assertEqual(token,result['resetToken'])
+        self.assertEqual(self.call('/api/params', {'params':{'safe.line':'12'}},
+                         headers={'Content-Type':'application/json','X-Reset-Token':token})[0],200)
+
+    def test_failed_reset_rolls_back_database_and_keeps_uploads(self):
+        db.save_flow([{'交易日期':'2026-11-01','收支方向':'收','金额':100,'对方户名':'测试客户'}])
+        db_eco.params_save({'safe.line':'9999'})
+        pathlib.Path(server.UPLOAD_DIR).mkdir()
+        original=pathlib.Path(server.UPLOAD_DIR)/'generated.txt'
+        original.write_text('generated test data')
+        with patch('reset_data.os.replace', side_effect=OSError('simulated file lock')):
+            code, result=self.call('/api/reset', {'confirm':'RESET_ALL'})
+        self.assertEqual(code,500,result)
+        self.assertEqual(len(db.load_flow()),1)
+        self.assertEqual(db_eco.params_map()['safe.line'],'9999')
+        self.assertEqual(db.get_meta('reset_token',''),'')
+        self.assertEqual(original.read_text(),'generated test data')
+
     def test_upload_approve_reload_and_settle_keep_plan(self):
         wb=load_workbook(io.BytesIO(self.call('/api/template?id=TPL-05')[1]))
         values=[1,'测试主体','测试板块','境内','CNY','流入','经营活动','销售回款（商品/渠道分销）',100,None,'上旬','测试人员','草稿','自动生成的测试记录']

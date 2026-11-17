@@ -35,6 +35,7 @@ import json
 import mimetypes
 import shutil
 import tempfile
+import threading
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, unquote, quote, unquote_to_bytes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -47,6 +48,8 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(BASE)                     # 项目根目录
 UPLOAD_DIR = os.path.join(BASE, "uploads")
 PORT = int(os.environ.get("WH_PORT", "8765"))
+# 重置、备份与正常读写互斥，防止半清空或旧请求在重置期间落库。
+DATA_LOCK = threading.RLock()
 
 
 def _pick_html():
@@ -137,10 +140,12 @@ BOOT = r"""
     var health=await fetch("/api/health",{cache:"no-store"});
     if(!health.ok) throw new Error("数仓未连接");
     WH.on=true;
-    var rules=await fetch("/api/rules",{cache:"no-store"}).then(r=>r.json());
-    await WH.restoreRules(rules.payload ? JSON.parse(rules.payload) : null);
     var d=await window.WH_REFRESH();
     if(!d) throw new Error("数仓取数失败");
+    var rules=await fetch("/api/rules",{cache:"no-store"}).then(r=>r.json());
+    await WH.restoreRules(rules.payload ? JSON.parse(rules.payload) : null);
+    window.WH_RECOMPUTE();
+    await flushImports();
     if(badge){badge.style.display="inline-flex";badge.title="数据来自本地数仓："+d.flow.length+" 笔流水 / "+d.plan.length+" 行计划";}
     goHash();
   }catch(e){WH.on=false;if(badge){badge.style.display="inline-flex";badge.textContent="数仓未连接";} }
@@ -220,11 +225,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.send_header("Access-Control-Allow-Headers",
-                         "Content-Type,X-File-Name,X-Period,X-Actor,X-Submit")
+                         "Content-Type,X-File-Name,X-Period,X-Actor,X-Submit,X-Reset-Token")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_GET(self):
+        with DATA_LOCK:
+            return self.get_routes()
+
+    def get_routes(self):
         path = urlparse(self.path).path
         q = self._q()
 
@@ -284,7 +293,30 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, b"not found", "text/plain; charset=utf-8")
 
     def do_POST(self):
+        with DATA_LOCK:
+            token = db.get_meta('reset_token', '')
+            if token and self.headers.get('X-Reset-Token', '') != token:
+                self.close_connection = True
+                return self._json({'ok': False, 'error': '测试数据已重置，请刷新页面后重新操作'}, 409)
+            return self.post_routes()
+
+    def post_routes(self):
         path = urlparse(self.path).path
+
+        if path == '/api/reset':
+            origin = self.headers.get('Origin')
+            site = self.headers.get('Sec-Fetch-Site')
+            if (origin and origin != 'http://' + self.headers.get('Host', '')) or site not in (None, 'same-origin', 'none'):
+                self.close_connection = True
+                return self._json({'ok': False, 'error': '请从当前项目页面发起重置'}, 403)
+            body = self._body()
+            if body.get('confirm') != 'RESET_ALL':
+                return self._json({'ok': False, 'error': '需要明确确认重置全部测试数据'}, 400)
+            from reset_data import reset_all
+            try:
+                return self._json(reset_all(UPLOAD_DIR, body.get('browserState') or {}))
+            except Exception as exc:
+                return self._json({'ok': False, 'error': '重置失败，原数据已保留：' + str(exc)}, 500)
 
         # ---- 原有 ----
         if path == "/api/import":

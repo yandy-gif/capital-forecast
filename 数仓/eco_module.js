@@ -14,6 +14,12 @@ var ECO = window.ECO = {
   lastUpload: null,
   PANES: { p6: 1, p7: 1, p8: 1 }
 };
+var savedEco=loadLS('ecoWorkspace');
+if(savedEco){
+  Object.assign(ECO.sel,savedEco.sel||{});
+  ECO.planStep=savedEco.planStep||1;ECO.lastUpload=savedEco.lastUpload||null;ECO.form=savedEco.form||{};
+}
+ECO.tab=S.tab;
 
 /* 接口地址自适应：
    - 通过 http(s) 打开看板 → 同源相对路径；
@@ -219,12 +225,13 @@ ECO.load = function (then) {
     /* 默认期间：优先「有已锁定计划」的最新一期，预实比对才有计划侧可比 */
     var lp = {}; ECO.locked.forEach(function (i) { lp[i.period] = 1; });
     var lps = Object.keys(lp).sort();
-    if (lps.length) ECO.sel.period = lps[lps.length - 1];
+    if (lps.length && !ECO.sel.period) ECO.sel.period = lps[lps.length - 1];
     else if (!ECO.sel.period) {
       var ps2 = (rs[0].stats && rs[0].stats.periods) || [];
       ECO.sel.period = ps2[ps2.length - 1] || "";
     }
     ECO.render(ECO.tab);
+    saveWorkspace();
     if (then) then();
   });
 };
@@ -287,7 +294,7 @@ function hook() {
             .forEach(function (x) { x.value = ""; });
           var dz = document.getElementById("ecoDz");
           if (dz) dz.classList.remove("on");
-          toast("已导入 " + (src && src.length ? src.length : 0) + " 笔并完成打标，可以继续导入下一份");
+          toast("已解析 " + (src && src.length ? src.length : 0) + " 笔并完成打标，正在保存到数仓");
         } catch (e3) { }
         syncLayout();
       } catch (e) { window.__ecoTagging = 0; }
@@ -676,6 +683,11 @@ function approveHtml(sel) {
 }
 
 function bindP6() {
+  ['ecoPeriod','ecoActor','ecoApActor'].forEach(function(id){
+    var input=document.getElementById(id);if(!input)return;
+    if(ECO.form && ECO.form[id]!==undefined) input.value=ECO.form[id];
+    input.addEventListener('input',function(){ECO.form=ECO.form||{};ECO.form[id]=input.value;saveWorkspace();});
+  });
   var dz = $("#ecoDz"), fi = $("#ecoFile");
   if (dz && fi && !dz._b) {
     dz._b = 1;
@@ -713,7 +725,7 @@ function upload(file) {
     var expected=namedMonth[1]+"-"+String(+namedMonth[2]).padStart(2,"0");
     if(expected!==period && !confirm("文件名中的月份是 "+expected+"，填写的预算期间是 "+period+"。同期间同主体的新计划批准后会替代原有效版本。仍按 "+period+" 上传吗？")) return;
   }
-  localStorage.setItem("eco.actor", actor);
+  saveProjectValue("eco.actor", actor);
   var autoSub = false;                       /* 上传只存草稿，审核通过由人来点 */
   var res = $("#ecoUpRes");
   if (res) res.innerHTML = '<div class="eco-k">正在解析 ' + esc(file.name) + ' …</div>';
@@ -1053,7 +1065,7 @@ function syncLayout() {
         st3.style.opacity = ".42";
         st3.style.pointerEvents = "none";
         st3.style.filter = "grayscale(1)";
-        if (typeof S !== "undefined" && S && S.step === 3) {
+        if (WH.loaded && typeof S !== "undefined" && S && S.step === 3) {
           S.step = 1;
           try { renderSteps(); renderStepBody(); } catch (e3) { }
         }
@@ -1260,7 +1272,7 @@ function gateP1() {
 function approveAll() {
   var actor = ($("#ecoApActor") || {}).value || "";
   if (!actor) { toast("请先填操作人（审核要留痕）", true); return; }
-  localStorage.setItem("eco.actor", actor);
+  saveProjectValue("eco.actor", actor);
   var force = !!($("#ecoForce") || {}).checked;
   var sub = (ECO.data.submissions || []).filter(function (x) { return x.id === ECO.sel.sub; })[0];
   if (!sub) { toast("先在清单里选一张提报单", true); return; }
@@ -1361,7 +1373,7 @@ function ecoClick(b) {
     var role = ($("#ecoApRole") || {}).value || "";
     var reason = ($("#ecoApReason") || {}).value || "";
     var force = ($("#ecoForce") || {}).checked;
-    if (actor) localStorage.setItem("eco.actor", actor);
+    if (actor) saveProjectValue("eco.actor", actor);
     if (!actor) { toast("请先填操作人（审批要留痕）", true); return; }
     post("/api/submission-action", { id: ECO.sel.sub, action: action, actor: actor, role: role,
       reason: reason, force: force }).then(function (d) {
@@ -1381,7 +1393,7 @@ function ecoClick(b) {
   if (k === "submitonly") {
     var a0 = ($("#ecoApActor") || {}).value || "";
     if (!a0) { toast("请先填操作人", true); return; }
-    localStorage.setItem("eco.actor", a0);
+    saveProjectValue("eco.actor", a0);
     post("/api/submission-action", { id: ECO.sel.sub, action: "提交", actor: a0,
       force: !!($("#ecoForce") || {}).checked, reason: "提交待审" }).then(function (r) {
       toast(r.ok ? "已提交，等待复核" : (r.error || "提交失败"), !r.ok);
@@ -1438,7 +1450,7 @@ function monthDiff(a, b) {
 
 var configDraft={params:{},terms:{}};
 try { var cd=JSON.parse(localStorage.getItem("eco.configDraft")||"null");if(cd)configDraft={params:cd.params||{},terms:cd.terms||{}}; }catch(e){}
-function storeConfigDraft(){localStorage.setItem("eco.configDraft",JSON.stringify(configDraft));}
+function storeConfigDraft(){saveProjectValue("eco.configDraft",JSON.stringify(configDraft));}
 function captureConfigDraft(ev){
   var el=ev.target;
   if(el.matches && el.matches("[data-pid]")) configDraft.params[el.dataset.pid]=el.value;
@@ -1998,6 +2010,12 @@ window.WH_REFRESH = function () {
   var base = (typeof API !== "undefined" && API) ? API : "";
   return fetch(base + "/api/rows", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
     if (!d || !d.flow) return null;
+    if(!acceptResetToken(d.resetToken||'')) return null;
+    WH.loaded=true;
+    if(importPending.flow){
+      var merged=new Map();d.flow.concat(importPending.flow.rows).forEach(function(row){merged.set(rowKey('flow',row),row);});
+      d.flow=Array.from(merged.values());
+    }
     window.__WH_BAL = d.balances || { byMonth: {}, accounts: [] };
     window.__WH_MANUAL = d.manual || {};
     window.__WH_STATS = d.stats || {};
@@ -2005,9 +2023,10 @@ window.WH_REFRESH = function () {
       if (typeof S === "undefined" || !S) return d;
       S.raw.flow = S.raw.flow || {};
       S.raw.flow.rows = d.flow;
-      S.raw.flow.name = "本地数仓";
+      S.raw.flow.name = importPending.flow ? importPending.flow.fileName : "本地数仓";
       S.raw.flow.meta = d.flowMeta || {};
       S.raw.flow.items = (d.items || []).filter(x=>x.kind==="flow" && d.flow.some(r=>r.__batch===x.batch));
+      if(!d.flow.length) S.raw.flow=null;
       S.raw.fileLog = d.items || [];
       S.applied = true;
       /* 本批 = 最近一次导入的批次（stats.active_flow），人工审核默认只看它 */
@@ -2033,30 +2052,6 @@ window.WH_REFRESH = function () {
     return d;
   }).catch(function () { return null; });
 };
-
-function stripBuiltin() {
-  try {
-    if (typeof DATA === "undefined" || !DATA) return;
-    DATA.actAll = [];
-    DATA.actIn = {}; DATA.actOut = {}; DATA.actNet = {};
-    DATA.actCat = {}; DATA.actCatCnt = {}; DATA.actInCat = {}; DATA.actOutCat = {};
-    DATA.unmatched = []; DATA.actBig = [];
-    DATA.actMeta = { rows: 0, uncls: 0, unclsAmt: 0 };
-    DATA.actInTotal = 0; DATA.actOutTotal = 0;
-    DATA.balHist = [null, null, null];
-    DATA.balLatest = null;
-    DATA.cov = { total: 0, 可映射: 0, 部分可映射: 0, 无对应: 0, tagged: 0 };
-    DATA.plan = [];
-  } catch (e) { }
-  try {
-    if (typeof S !== "undefined" && S) {
-      S.cash = 0;
-      S.applied = false;
-      S.raw.flow = null;
-      S.raw.fileLog = [];
-    }
-  } catch (e2) { }
-}
 
 /* 页面顶部提示条（同一个 id 只留一条） */
 function noticeBar(paneId, html, color) {
@@ -2108,7 +2103,11 @@ if (typeof window.renderP3 === "function") {
 }
 
 function boot() {
-  inject(); hook(); rewireLegacyTplButtons(); rewireTplLabels(); stripBuiltin();
+  inject(); hook(); rewireLegacyTplButtons(); rewireTplLabels();
+  restoreImportDrafts();
+  showTab(/^p[0-8]$/.test(S.tab)?S.tab:'p0');
+  var backup=loadLS('resetBackup');
+  if(backup) workspaceStatus('测试内容已重置。重置前备份：'+backup);
   if (window.MutationObserver) { new MutationObserver(function () { rewireTplLabels(); syncLayout(); }).observe(document.body, { childList: true, subtree: true }); }
   ECO.load();
   /* file:// 打开时服务端不会注入 BOOT 脚本，这里自行处理 hash，保证双击也能直达模块 */
