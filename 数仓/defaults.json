@@ -1,0 +1,694 @@
+{
+  "subjects": [
+    {
+      "direction": "流入",
+      "cat": "经营活动",
+      "subject": "服务与咨询费收入",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流入",
+      "cat": "经营活动",
+      "subject": "内容分成及广告收入",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流入",
+      "cat": "经营活动",
+      "subject": "平台返点与佣金收入",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流入",
+      "cat": "经营活动",
+      "subject": "退税款及政府补贴",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流入",
+      "cat": "经营活动",
+      "subject": "其他经营流入",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流入",
+      "cat": "投资活动",
+      "subject": "理财/存款到期赎回",
+      "cf_attr": "投资性"
+    },
+    {
+      "direction": "流入",
+      "cat": "投资活动",
+      "subject": "投资收益与利息收入",
+      "cf_attr": "投资性"
+    },
+    {
+      "direction": "流入",
+      "cat": "投资活动",
+      "subject": "处置资产收入",
+      "cf_attr": "投资性"
+    },
+    {
+      "direction": "流入",
+      "cat": "投资活动",
+      "subject": "收回对外借款",
+      "cf_attr": "投资性"
+    },
+    {
+      "direction": "流入",
+      "cat": "筹资活动",
+      "subject": "银行借款提款",
+      "cf_attr": "筹资性"
+    },
+    {
+      "direction": "流入",
+      "cat": "筹资活动",
+      "subject": "股东投入/增资",
+      "cf_attr": "筹资性"
+    },
+    {
+      "direction": "流入",
+      "cat": "筹资活动",
+      "subject": "股东借款",
+      "cf_attr": "筹资性"
+    },
+    {
+      "direction": "流入",
+      "cat": "筹资活动",
+      "subject": "其他融资",
+      "cf_attr": "筹资性"
+    },
+    {
+      "direction": "流入",
+      "cat": "内部往来",
+      "subject": "集团资金调拨（拨入）",
+      "cf_attr": "内部往来（合并抵消）"
+    },
+    {
+      "direction": "流入",
+      "cat": "内部往来",
+      "subject": "内部借款回收",
+      "cf_attr": "内部往来（合并抵消）"
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "租金物业及水电",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "研发投入（材料/委外）",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "物流仓储及履约",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "差旅及业务招待",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "专业服务费（审计/法务/财税）",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "IT与软件订阅",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "税费缴纳",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "其他经营流出",
+      "cf_attr": "经营性"
+    },
+    {
+      "direction": "流出",
+      "cat": "投资活动",
+      "subject": "固定资产采购",
+      "cf_attr": "投资性"
+    },
+    {
+      "direction": "流出",
+      "cat": "投资活动",
+      "subject": "无形资产/软件采购",
+      "cf_attr": "投资性"
+    },
+    {
+      "direction": "流出",
+      "cat": "投资活动",
+      "subject": "对外投资",
+      "cf_attr": "投资性"
+    },
+    {
+      "direction": "流出",
+      "cat": "投资活动",
+      "subject": "理财申购",
+      "cf_attr": "投资性"
+    },
+    {
+      "direction": "流出",
+      "cat": "投资活动",
+      "subject": "对外借款",
+      "cf_attr": "投资性"
+    },
+    {
+      "direction": "流出",
+      "cat": "筹资活动",
+      "subject": "归还本金",
+      "cf_attr": "筹资性"
+    },
+    {
+      "direction": "流出",
+      "cat": "筹资活动",
+      "subject": "支付利息",
+      "cf_attr": "筹资性"
+    },
+    {
+      "direction": "流出",
+      "cat": "筹资活动",
+      "subject": "融资手续费",
+      "cf_attr": "筹资性"
+    },
+    {
+      "direction": "流出",
+      "cat": "筹资活动",
+      "subject": "股东分红",
+      "cf_attr": "筹资性"
+    },
+    {
+      "direction": "流出",
+      "cat": "内部往来",
+      "subject": "集团资金调拨（拨出）",
+      "cf_attr": "内部往来（合并抵消）"
+    },
+    {
+      "direction": "流出",
+      "cat": "内部往来",
+      "subject": "内部借款发放",
+      "cf_attr": "内部往来（合并抵消）"
+    },
+    {
+      "direction": "流入",
+      "cat": "经营活动",
+      "subject": "销售回款（商品/渠道分销）",
+      "cf_attr": ""
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "市场推广及渠道佣金",
+      "cf_attr": ""
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "采购货款与生产成本",
+      "cf_attr": ""
+    },
+    {
+      "direction": "流出",
+      "cat": "经营活动",
+      "subject": "人力薪酬及社保公积金",
+      "cf_attr": ""
+    }
+  ],
+  "bridge": [
+    {
+      "id": "B-01",
+      "direction": "支",
+      "l1": "内部划转",
+      "l2": "（任意）",
+      "subject": "（剔除）",
+      "cashflow": "不列入现金流量",
+      "handle": "剔除",
+      "priority": 1,
+      "status": "启用"
+    },
+    {
+      "id": "B-02",
+      "direction": "支",
+      "l1": "其他",
+      "l2": "理财申购 / 基金 / 证券",
+      "subject": "（投资活动）",
+      "cashflow": "投资",
+      "handle": "单列",
+      "priority": 2,
+      "status": "启用"
+    },
+    {
+      "id": "B-03",
+      "direction": "收",
+      "l1": "其他",
+      "l2": "理财赎回 / 到期",
+      "subject": "（投资活动）",
+      "cashflow": "投资",
+      "handle": "单列",
+      "priority": 2,
+      "status": "启用"
+    },
+    {
+      "id": "B-04",
+      "direction": "收/支",
+      "l1": "其他",
+      "l2": "借款 / 保证金 / 押金",
+      "subject": "（内部往来或筹资）",
+      "cashflow": "其他",
+      "handle": "单列",
+      "priority": 2,
+      "status": "启用"
+    },
+    {
+      "id": "B-05",
+      "direction": "支",
+      "l1": "主营业务收入",
+      "l2": "线下货款退款 / 线上货款退款",
+      "subject": "销售回款（商品/渠道分销）",
+      "cashflow": "销售收款",
+      "handle": "冲减（负数）",
+      "priority": 3,
+      "status": "启用"
+    },
+    {
+      "id": "B-06",
+      "direction": "收",
+      "l1": "主营业务收入",
+      "l2": "线下货款 / 线上货款",
+      "subject": "销售回款（商品/渠道分销）",
+      "cashflow": "销售收款",
+      "handle": "归集",
+      "priority": 3,
+      "status": "启用"
+    },
+    {
+      "id": "B-07",
+      "direction": "支",
+      "l1": "主营业务成本",
+      "l2": "采购货款",
+      "subject": "采购货款与生产成本",
+      "cashflow": "采购付款",
+      "handle": "归集",
+      "priority": 3,
+      "status": "启用"
+    },
+    {
+      "id": "B-08",
+      "direction": "支",
+      "l1": "应交税费",
+      "l2": "税款 / 增值税 / 所得税 / 个税",
+      "subject": "税费缴纳",
+      "cashflow": "税费",
+      "handle": "归集",
+      "priority": 3,
+      "status": "启用"
+    },
+    {
+      "id": "B-09",
+      "direction": "支",
+      "l1": "销售费用 / 管理费用",
+      "l2": "工资 / 社保费 / 劳务报酬",
+      "subject": "人力薪酬及社保公积金",
+      "cashflow": "人力费",
+      "handle": "归集",
+      "priority": 4,
+      "status": "启用"
+    },
+    {
+      "id": "B-10",
+      "direction": "支",
+      "l1": "销售费用",
+      "l2": "广告推广费 / 达人佣金 / 平台佣金",
+      "subject": "市场推广及渠道佣金",
+      "cashflow": "市场费",
+      "handle": "归集",
+      "priority": 4,
+      "status": "启用"
+    },
+    {
+      "id": "B-11",
+      "direction": "支",
+      "l1": "销售费用",
+      "l2": "物流费 / 快递费 / 仓储费",
+      "subject": "物流仓储及履约",
+      "cashflow": "履约费",
+      "handle": "归集",
+      "priority": 4,
+      "status": "启用"
+    },
+    {
+      "id": "B-12",
+      "direction": "支",
+      "l1": "销售费用 / 管理费用",
+      "l2": "差旅费 / 业务招待费 / 费用报销",
+      "subject": "差旅及业务招待",
+      "cashflow": "差旅招待",
+      "handle": "归集",
+      "priority": 5,
+      "status": "启用"
+    },
+    {
+      "id": "B-13",
+      "direction": "支",
+      "l1": "管理费用",
+      "l2": "租赁费 / 房租 / 物业费 / 水电费",
+      "subject": "租金物业及水电",
+      "cashflow": "运营费",
+      "handle": "归集",
+      "priority": 5,
+      "status": "启用"
+    },
+    {
+      "id": "B-14",
+      "direction": "支",
+      "l1": "管理费用",
+      "l2": "办公费 / 办公用品 / 通讯 / 会务",
+      "subject": "其他经营流出",
+      "cashflow": "运营费",
+      "handle": "归集",
+      "priority": 5,
+      "status": "启用"
+    },
+    {
+      "id": "B-15",
+      "direction": "支",
+      "l1": "管理费用",
+      "l2": "审计费 / 咨询费 / 律师费 / 检测认证",
+      "subject": "专业服务费（审计/法务/财税）",
+      "cashflow": "专业服务",
+      "handle": "归集",
+      "priority": 5,
+      "status": "启用"
+    },
+    {
+      "id": "B-16",
+      "direction": "支",
+      "l1": "管理费用",
+      "l2": "软件 / 云服务 / SaaS / 系统实施",
+      "subject": "IT与软件订阅",
+      "cashflow": "IT",
+      "handle": "归集",
+      "priority": 5,
+      "status": "启用"
+    },
+    {
+      "id": "B-17",
+      "direction": "支",
+      "l1": "研发支出",
+      "l2": "研发材料 / 委外开发 / 临床试验",
+      "subject": "研发投入（材料/委外）",
+      "cashflow": "研发",
+      "handle": "归集",
+      "priority": 5,
+      "status": "启用"
+    },
+    {
+      "id": "B-18",
+      "direction": "支",
+      "l1": "财务费用",
+      "l2": "利息支出",
+      "subject": "支付利息",
+      "cashflow": "筹资",
+      "handle": "归集",
+      "priority": 4,
+      "status": "启用"
+    },
+    {
+      "id": "B-19",
+      "direction": "支",
+      "l1": "财务费用",
+      "l2": "银行手续费",
+      "subject": "融资手续费",
+      "cashflow": "筹资",
+      "handle": "归集",
+      "priority": 4,
+      "status": "启用"
+    },
+    {
+      "id": "B-20",
+      "direction": "收/支",
+      "l1": "（未命中）",
+      "l2": "（未命中）",
+      "subject": "（挂起 1501）",
+      "cashflow": "未分类",
+      "handle": "挂起",
+      "priority": 99,
+      "status": "启用"
+    },
+    {
+      "id": "B-99",
+      "direction": "支",
+      "l1": "管理费用",
+      "l2": "检测费",
+      "subject": "专业服务费（审计/法务/财税）",
+      "cashflow": "市场费",
+      "handle": "归集",
+      "priority": 5,
+      "status": "启用"
+    }
+  ],
+  "params": [
+    {
+      "id": "grp.fx",
+      "grp": "汇率",
+      "label": "记账汇率来源",
+      "value": "记账汇率与参数中心",
+      "unit": "",
+      "scope": "全局",
+      "note": "上传时参数 fx.币种 优先于模板汇率",
+      "locked": 1
+    },
+    {
+      "id": "term.default",
+      "grp": "账期",
+      "label": "默认客户账期",
+      "value": "30",
+      "unit": "天",
+      "scope": "全局",
+      "note": "客户账期表里没列到的客户按此值；影响「账期口径」匹配窗口",
+      "locked": 0
+    },
+    {
+      "id": "term.ka_default",
+      "grp": "账期",
+      "label": "KA 客户默认账期",
+      "value": "45",
+      "unit": "天",
+      "scope": "全局",
+      "note": "预留 KA 默认账期配置；实际预测优先使用客户账期与 term.default",
+      "locked": 0
+    },
+    {
+      "id": "term.window_mode",
+      "grp": "账期",
+      "label": "预实匹配窗口口径",
+      "value": "滚动3月",
+      "unit": "",
+      "scope": "全局",
+      "note": "同期口径 / 账期口径 / 滚动3月（默认，计划月±1月）",
+      "locked": 0
+    },
+    {
+      "id": "term.purchase_lag",
+      "grp": "账期",
+      "label": "采购付款账期",
+      "value": "0",
+      "unit": "天",
+      "scope": "全局",
+      "note": "0＝当月采购当月付清（模型假设）；改为 30 表示次月付",
+      "locked": 0
+    },
+    {
+      "id": "collect.month_ratio",
+      "grp": "回款",
+      "label": "当月回款比例",
+      "value": "1.0",
+      "unit": "",
+      "scope": "全局",
+      "note": "1.0＝计划含税收入当月全额回款（模型假设）；0.7 表示 70% 当月、30% 按账期后移",
+      "locked": 0
+    },
+    {
+      "id": "collect.bad_debt",
+      "grp": "回款",
+      "label": "坏账/折让率",
+      "value": "0",
+      "unit": "",
+      "scope": "全局",
+      "note": "预测回款时按此比例打折",
+      "locked": 0
+    },
+    {
+      "id": "safe.line",
+      "grp": "水位",
+      "label": "资金安全线",
+      "value": "0",
+      "unit": "元",
+      "scope": "全局",
+      "note": "请按实际需求填写安全线；默认 0 仅用于空库启动",
+      "locked": 0
+    },
+    {
+      "id": "safe.months",
+      "grp": "水位",
+      "label": "安全水位覆盖月数",
+      "value": "2",
+      "unit": "月",
+      "scope": "全局",
+      "note": "用于反算安全线",
+      "locked": 0
+    },
+    {
+      "id": "safe.late_out_ratio",
+      "grp": "水位",
+      "label": "下旬流出集中度阈值",
+      "value": "0.5",
+      "unit": "",
+      "scope": "全局",
+      "note": "下旬流出占全月流出比重超过此值，需提前 3 个工作日备付头寸",
+      "locked": 0
+    },
+    {
+      "id": "th.var_ok",
+      "grp": "阈值",
+      "label": "符合：差异率上限",
+      "value": "0.05",
+      "unit": "",
+      "scope": "全局",
+      "note": "或绝对差 ≤1 万，绿色",
+      "locked": 0
+    },
+    {
+      "id": "th.var_ok_abs",
+      "grp": "阈值",
+      "label": "符合：绝对差上限",
+      "value": "10000",
+      "unit": "元",
+      "scope": "全局",
+      "note": "小额差异直接判符合",
+      "locked": 0
+    },
+    {
+      "id": "th.var_warn",
+      "grp": "阈值",
+      "label": "预警：差异率下限",
+      "value": "0.20",
+      "unit": "",
+      "scope": "全局",
+      "note": "超过即红色，进复盘清单必须归因",
+      "locked": 0
+    },
+    {
+      "id": "th.big_amount",
+      "grp": "阈值",
+      "label": "大额标准（G1 强制说明）",
+      "value": "500000",
+      "unit": "元",
+      "scope": "全局",
+      "note": "≥此金额的计划行必须有备注说明，否则 G1 标红",
+      "locked": 0
+    },
+    {
+      "id": "th.tag_rate",
+      "grp": "阈值",
+      "label": "流水打标率下限",
+      "value": "0.80",
+      "unit": "",
+      "scope": "全局",
+      "note": "体检指标，不达标要补规则",
+      "locked": 1
+    },
+    {
+      "id": "th.map_rate",
+      "grp": "阈值",
+      "label": "金额映射率下限",
+      "value": "0.90",
+      "unit": "",
+      "scope": "全局",
+      "note": "体检指标",
+      "locked": 1
+    },
+    {
+      "id": "th.cust_hit",
+      "grp": "阈值",
+      "label": "客户命中率下限",
+      "value": "0.70",
+      "unit": "",
+      "scope": "全局",
+      "note": "客户命中率参考阈值",
+      "locked": 1
+    },
+    {
+      "id": "th.recon_diff",
+      "grp": "阈值",
+      "label": "勾稽差异上限",
+      "value": "0.005",
+      "unit": "",
+      "scope": "全局",
+      "note": "体检指标",
+      "locked": 1
+    },
+    {
+      "id": "gate.allow_placeholder",
+      "grp": "口径",
+      "label": "允许占位主体 XXX 提交",
+      "value": "0",
+      "unit": "",
+      "scope": "全局",
+      "note": "保留口径参数；当前占位主体检查是提示项，审批前需要人工确认",
+      "locked": 0
+    },
+    {
+      "id": "scope.include_non_ka",
+      "grp": "口径",
+      "label": "非 KA 回款是否计入计划",
+      "value": "单列",
+      "unit": "",
+      "scope": "全局",
+      "note": "计入 / 单列「其他经销商」/ 剔除（设计文档待拍板项②）",
+      "locked": 0
+    },
+    {
+      "id": "tax.basis",
+      "grp": "口径",
+      "label": "税费口径",
+      "value": "实缴",
+      "unit": "",
+      "scope": "全局",
+      "note": "实缴（流水）/ 计提（预算），预实差异需注明",
+      "locked": 0
+    },
+    {
+      "id": "fc.horizon",
+      "grp": "预测",
+      "label": "滚动预测期数",
+      "value": "3",
+      "unit": "月",
+      "scope": "全局",
+      "note": "1+2 或 3+9 滚动",
+      "locked": 0
+    }
+  ],
+  "fx": [
+    {
+      "currency": "CNY",
+      "name": "人民币",
+      "rate_cny": 1
+    }
+  ]
+}

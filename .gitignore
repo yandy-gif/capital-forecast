@@ -1,0 +1,36 @@
+# Local financial data and all spreadsheet exports/imports
+*.db
+*.db-*
+*.sqlite*
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.tsv
+*.zip
+*.png
+*.jpg
+*.pdf
+uploads/
+backup/
+修复备份/
+测试样例/
+_archive*/
+tmp/
+.runtime/
+# Runtime and local tooling
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+*.pid
+*.bak*
+.env
+.env.*
+.workbuddy/
+.archify/
+.codex/
+.DS_Store
+Thumbs.db
