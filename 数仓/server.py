@@ -295,13 +295,16 @@ class Handler(BaseHTTPRequestHandler):
             if not rows:
                 return self._json({"ok": False, "error": "没有数据行"}, 400)
             res = db.save_plan(rows, name) if kind == "plan" else db.save_flow(rows, name)
-            try:
-                db.add_request("plan" if kind == "plan" else "flow", name, res.get("batch", ""),
-                               res.get("rows", 0) + res.get("updated", 0), "已完成",
-                               body.get("actor") or "", "导入" + ("（覆盖同文件同序号的行）" if res.get("updated") else ""))
-            except Exception:
-                pass
-            return self._json({"ok": True, **res})
+            eff = (res.get("rows") or 0) + (res.get("updated") or 0)
+            # 全部被判为重复（一行没写入）时不留申请记录，也不动 active 批次
+            if eff > 0:
+                try:
+                    db.add_request("plan" if kind == "plan" else "flow", name, res.get("batch", ""),
+                                   eff, "已完成", body.get("actor") or "",
+                                   "导入" + ("（覆盖同文件同序号的行）" if res.get("updated") else ""))
+                except Exception:
+                    pass
+            return self._json({"ok": True, "duplicated": eff == 0, **res})
         if path == "/api/tagged":
             body = self._body()
             rows = body.get("rows") or []

@@ -1078,22 +1078,10 @@ function syncLayout() {
     $$('#p0 .card').forEach(function (c) {
       if (!cardImp && String(c.textContent || "").indexOf("导入银行流水") >= 0) cardImp = c;
     });
+    /* 打标统计条（「已自动应用打标规则 · 命中 N 笔 / 重新应用」）已按用户要求从界面移除 */
     if (cardImp) {
-      var st = document.getElementById("ecoTagStat");
-      if (!st) { st = document.createElement("div"); st.id = "ecoTagStat"; }
-      st.className = "eco-k";
-      st.style.cssText = "margin:10px 0 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;" +
-        "padding-top:8px;border-top:1px dashed #E8ECF2";
-      var fs2 = (typeof flowStats === "function") ? flowStats() : { all: [], ok: [], no: [] };
-      var tot = fs2.all.length, okn = fs2.ok.length, non = fs2.no.length;
-      var msg = tot
-        ? ('✓ 已自动应用打标规则：共 ' + tot + ' 笔 · 命中 ' + okn + ' 笔（' +
-           (tot ? Math.round(okn / tot * 100) : 0) + '%）· 未识别 ' + non + ' 笔')
-        : '尚未导入流水：导入后会自动应用打标规则';
-      var hh = '<span>' + msg + '</span>' +
-        (tot ? '<button class="eco-btn gh" data-eco="rerunrules" style="padding:2px 9px;font-size:11px">重新应用</button>' : '');
-      if (st._sig !== hh) { st.innerHTML = hh; st._sig = hh; }
-      if (st.parentNode !== cardImp) cardImp.appendChild(st);
+      var _st0 = document.getElementById("ecoTagStat");
+      if (_st0 && _st0.parentNode) _st0.parentNode.removeChild(_st0);
     }
     /* v9 的 step3 用 S.applied 判断「是否已打标」，手动导入后必须置位，否则一直提示「还没有应用规则」 */
     if (typeof S !== "undefined" && S) {
@@ -2001,6 +1989,12 @@ window.WH_REFRESH = function () {
     window.__WH_BAL = d.balances || { byMonth: {}, accounts: [] };
     window.__WH_MANUAL = d.manual || {};
     window.__WH_STATS = d.stats || {};
+    /* 已上传过的文件名清单：页面用它拦截重复上传 */
+    try {
+      window.__WH_FILES = (d.items || []).map(function (x) {
+        return String(x.name || "").trim();
+      }).filter(Boolean);
+    } catch (eF) { }
     try {
       if (typeof S === "undefined" || !S) return d;
       S.raw.flow = S.raw.flow || {};
@@ -2008,7 +2002,13 @@ window.WH_REFRESH = function () {
       S.raw.flow.name = "本地数仓";
       S.raw.flow.meta = d.flowMeta || {};
       S.raw.flow.items = (d.items || []).filter(x=>x.kind==="flow" && d.flow.some(r=>r.__batch===x.batch));
-      S.raw.fileLog = d.items || [];
+      /* 上传结果：默认展示「最近一个批次」的解析结果（items 已按批次倒序），
+         本次刚导入的由页面自己覆盖；不再把全部历史批次堆进来 */
+      if (!S.raw.fileLog || !S.raw.fileLog.length) {
+        var _its = d.items || [];
+        var _last = _its.length ? _its[0].batch : null;
+        S.raw.fileLog = _last ? _its.filter(function (x) { return x.batch === _last; }) : [];
+      }
       S.applied = true;
       /* 本批 = 最近一次导入的批次（stats.active_flow），人工审核默认只看它 */
       try {

@@ -88,12 +88,20 @@ def _flow_dir(v):
     return t
 
 
+def _bal_str(v):
+    """余额归一化：把 715000 / 715000.0 / 715,000 视为同一个值，避免不同来路（csv 与 xlsx）判不出重复。"""
+    if v is None or str(v).strip() == "":
+        return ""
+    return _amt_str(v)
+
+
 def flow_key(r):
     """去重键，按可靠性降级：
     1) 银行流水号（唯一，最可靠）
     2) 交易时间（到秒）+ 方向 + 金额 —— 同日同额的真实多笔时间不同，不会被误合并
     3) 余额 + 方向 + 金额 —— 同一账户余额逐笔变化
     4) 日期+方向+金额+对方+摘要 —— 最后兜底（可能误合并同日同额同摘要的多笔手续费）
+    余额与金额统一转成数值再拼键，避免 "2000" 与 "2000.0" 被当成两笔。
     """
     d = str(r.get("交易日期") or r.get("日期") or "").strip()
     di = _flow_dir(r.get("收支方向") or r.get("方向"))
@@ -102,10 +110,10 @@ def flow_key(r):
     if sn:
         return ("S", sn)
     ts = str(r.get("交易时间") or "").strip()
-    bal0 = str(r.get("余额") or "").strip()
+    bal0 = _bal_str(r.get("余额"))
     if ts:
         return ("T", d, ts, di, amt, bal0)
-    bal = str(r.get("余额") or "").strip()
+    bal = _bal_str(r.get("余额"))
     if bal:
         return ("B", d, bal, di, amt)
     return (
