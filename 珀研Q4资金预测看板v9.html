@@ -161,6 +161,7 @@ footer{font-size:11px;color:var(--muted);border-top:1px solid var(--line);paddin
       <div class="sub">v9 · 数据接入 / 管理视角 / 下钻分析 / 收支明细 / 预实分析 / 输出报表　｜　期间与数据以当前数仓为准　·　更新 2026-11-17</div>
     </div>
     <div class="controls">
+      <button class="btn ghost" id="resetTestData" style="background:#fff;color:#9b3028" title="清空全部测试内容并恢复初始配置">重置测试数据</button>
       <span id="whBadge" style="display:none;align-items:center;gap:5px;font-size:11.5px;background:rgba(255,255,255,.18);
         border:1px solid rgba(255,255,255,.4);border-radius:20px;padding:3px 10px;margin-right:12px">● 本地数仓</span>
       <label>公司
@@ -178,6 +179,8 @@ footer{font-size:11px;color:var(--muted);border-top:1px solid var(--line);paddin
 <nav><div class="wrap" id="tabs"></div></nav>
 
 <div class="wrap">
+<div role="status" id="workspaceStatus" style="font-size:12px;padding:8px 0;overflow-wrap:anywhere"></div>
+<button class="btn ghost" id="retryImport" hidden>重试保存导入数据</button>
 
 <!-- ============ 0 数据接入 ============ -->
 <section class="pane" id="p0">
@@ -393,6 +396,9 @@ const DATA = {"company": "本公司", "plan": [], "actCat": {}, "actCatCnt": {},
 /* ================= 本地数仓客户端（用 http 打开看板时自动启用） ================= */
 var WH = {
   on: false,
+  loaded: false,
+  resetToken: loadLS("resetToken") || "",
+  writes: 0, resetting: false,
   post(path, obj){
     return fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify(obj)}).then(async r=>{
@@ -415,9 +421,23 @@ var WH = {
   },
   pushRules(rules){ if(!this.on) return Promise.resolve({ok:false}); return this.post("/api/rules", {payload: JSON.stringify(rules||[])}); },
   pushImport(kind, fileName, rows){
-    if(!this.on || !rows || !rows.length) return Promise.resolve(null);
-    return this.post("/api/import", {kind, fileName, rows});   /* 返回 Promise：落库完成后再刷新 */
+    /* 走草稿 + flushImports：落库失败时草稿留在本机、刷新可恢复；
+       flushImports 内部 await WH_REFRESH()，所以返回的 Promise 兑现时数据已可查询 */
+    if(!rows || !rows.length) return Promise.resolve({ok:false});
+    importPending[kind]={kind,fileName,rows};
+    storeImportDrafts();
+    return flushImports();
   }
+};
+// 同源写请求带上本页的数据版本，重置前打开的旧页面不能写回旧草稿。
+const originalFetch=window.fetch.bind(window);
+window.fetch=function(url,options={}){
+  const target=new URL(String(url),location.href);
+  if(String(options.method||"GET").toUpperCase()!=="POST" || target.origin!==location.origin || !target.pathname.startsWith('/api/')) return originalFetch(url,options);
+  if(WH.resetting && target.pathname!=="/api/reset") return Promise.reject(new Error("正在重置，请稍后操作"));
+  const headers=new Headers(options.headers||{});headers.set("X-Reset-Token",WH.resetToken);
+  WH.writes++;
+  return originalFetch(url,{...options,headers}).finally(()=>{WH.writes--;});
 };
 
 const MONTHS = ["2026-10","2026-11","2026-12"];
@@ -457,6 +477,105 @@ const P = {
   taxRate: 0.0003*2,
   incomeTax: 0.20
 };
+
+const WORKSPACE_FIELDS=['tab','step','company','scen','cash','safe','wfMonth','drillCat','drillAct','drillCo','dSrc','dMonth','dCat','dKw','dDir','dMin','thr','penSrc','batchId','batchKeys','batchDone','mScope','mFilter','mKw','confirmed','savedAt'];
+const savedWorkspace=loadLS("workspace");
+if(savedWorkspace && savedWorkspace.version===1){
+  WORKSPACE_FIELDS.forEach(k=>{if(Object.prototype.hasOwnProperty.call(savedWorkspace.state||{},k))S[k]=savedWorkspace.state[k];});
+  Object.assign(P,savedWorkspace.params||{});
+  document.getElementById('company').value=S.company;
+}
+let workspacePaused=false;
+function saveWorkspace(){
+  if(workspacePaused || WH.resetting || !projectStorageCurrent()) return;
+  const state={};WORKSPACE_FIELDS.forEach(k=>{if(S[k]!==undefined)state[k]=S[k];});
+  saveLS("workspace",{version:1,state,params:P});
+  if(window.ECO) saveLS("ecoWorkspace",{sel:ECO.sel,planStep:ECO.planStep,lastUpload:ECO.lastUpload,form:ECO.form||{}});
+}
+function workspaceStatus(message){document.getElementById("workspaceStatus").textContent=message;}
+let importPending=loadLS("importPending")||{}, importSaving=null;
+function storeImportDrafts(){
+  if(!projectStorageCurrent() || WH.resetting) return false;
+  try{localStorage.setItem("pryan.importPending",JSON.stringify(importPending));return true;}
+  catch(e){workspaceStatus("浏览器空间不足，导入草稿未能备份，请等待保存到数仓后再刷新。");return false;}
+}
+function restoreImportDrafts(){
+  if(importPending.flow){
+    const p=importPending.flow;
+    commitFlow(p.rows,{},[{name:p.fileName,ok:true,kind:'flow',rows:p.rows.length}],0);
+  }
+  if(importPending.plan){const p=importPending.plan;commitPlan(p.rows,{},[{name:p.fileName,ok:true}],0);}
+  if(Object.keys(importPending).length){
+    workspaceStatus("导入数据尚未保存到数仓，已恢复本机草稿；请重试保存。");
+    document.getElementById("retryImport").hidden=false;
+  }
+}
+function flushImports(){
+  if(importSaving) return importSaving;
+  if(!Object.keys(importPending).length) return Promise.resolve({ok:true});
+  if(!WH.on || WH.resetting){workspaceStatus("数仓未连接，导入数据未保存；本机草稿已保留。");return Promise.resolve({ok:false});}
+  importSaving=(async()=>{
+    const results=[];
+    try{
+      while(Object.keys(importPending).length){
+        const kind=Object.keys(importPending)[0], sent=JSON.stringify(importPending[kind]);
+        workspaceStatus("正在保存导入数据，请稍候…");
+        const result=await WH.post('/api/import',JSON.parse(sent));
+        results.push(result);
+        if(!result || !result.ok) throw new Error((result&&result.error)||'保存失败');
+        if(JSON.stringify(importPending[kind])===sent) delete importPending[kind];
+        storeImportDrafts();
+      }
+      document.getElementById('retryImport').hidden=true;
+      workspaceStatus("导入数据已保存，刷新后仍会保留。");
+      if(window.WH_REFRESH) await window.WH_REFRESH();
+      /* 把每个批次的落库回包带出去：调用方据此判断是否「内容完全重复（一行没写）」 */
+      return {ok:true,results:results};
+    }catch(e){
+      workspaceStatus("导入保存失败："+e.message+"；请重试保存，刷新会恢复尚未保存的草稿。");
+      document.getElementById('retryImport').hidden=false;
+      return {ok:false,error:e.message};
+    }finally{importSaving=null;}
+  })();return importSaving;
+}
+function clearWorkspaceStorage(token){
+  workspacePaused=true;
+  Object.keys(localStorage).filter(k=>k.startsWith('pryan.')||k.startsWith('eco.')).forEach(k=>localStorage.removeItem(k));
+  localStorage.setItem('pryan.resetToken',JSON.stringify(token));
+}
+function acceptResetToken(token){
+  if(token!==WH.resetToken){
+    WH.on=false;WH.resetting=true;workspacePaused=true;
+    if(loadLS('resetToken')!==token) clearWorkspaceStorage(token);
+    workspaceStatus('测试数据已在其他页面重置，正在载入空白状态…');
+    location.reload();return false;
+  }
+  saveLS('resetToken',token);return true;
+}
+async function resetTestData(){
+  if(WH.resetting) return;
+  if(S.busy || WH.writes || importSaving){workspaceStatus('正在解析或保存数据，请完成后再重置。');return;}
+  if(!WH.on){workspaceStatus('请先连接本地数仓，再重置测试数据。');return;}
+  if(!confirm('确认重置全部测试内容？\n\n将清空流水、计划、审批与导入记录、人工确认、主体和客户、自定义规则、参数及浏览器草稿，恢复初始配置。\n重置前会自动备份数据库、上传原件和当前浏览器草稿。\n\n点击“确定”才会清空；普通刷新不会重置。')) return;
+  WH.resetting=true;
+  const button=document.getElementById('resetTestData');button.disabled=true;
+  workspaceStatus('正在备份并重置测试数据…');
+  try{
+    const browserState={};Object.keys(localStorage).filter(k=>k.startsWith('pryan.')||k.startsWith('eco.')).forEach(k=>browserState[k]=localStorage.getItem(k));
+    const result=await WH.post('/api/reset',{confirm:'RESET_ALL',browserState});
+    if(!result || !result.ok) throw new Error((result&&result.error)||'重置失败');
+    clearWorkspaceStorage(result.resetToken);
+    localStorage.setItem('pryan.resetBackup',JSON.stringify(result.backup));
+    location.hash='p0';location.reload();
+  }catch(e){WH.resetting=false;button.disabled=false;workspaceStatus('重置失败：'+e.message+'；当前内容已保留。');}
+}
+document.getElementById('resetTestData').addEventListener('click',resetTestData);
+document.getElementById('retryImport').addEventListener('click',flushImports);
+['click','input','change'].forEach(type=>document.addEventListener(type,()=>queueMicrotask(saveWorkspace)));
+window.addEventListener('pagehide',saveWorkspace);
+window.addEventListener('storage',function(e){
+  if(e.key==='pryan.resetToken' && !projectStorageCurrent()) acceptResetToken(loadLS('resetToken')||'');
+});
 
 /* ================= 工具 ================= */
 const fmt = n => (n<0?"\u2212":"") + Math.abs(Math.round(n)).toLocaleString("en-US");
@@ -1114,7 +1233,12 @@ const DEFAULT_RULES = [
   {id:"R-23c",pri:5.4,dir:"支",  cp:"",                          memo:"物流|快递|仓储",                 acct:"销售费用",             l1:"销售费用",     l2:"物流仓储费", cf:"经营活动"},
   {id:"R-14",pri:99, dir:"不限",cp:"",                          memo:"",                              acct:"",                    l1:"待人工确认",   l2:"",           cf:"其他"}
 ];
-function saveLS(k,v){ try{ localStorage.setItem("pryan."+k, JSON.stringify(v)); }catch(e){} }
+function projectStorageCurrent(){return !WH || (loadLS('resetToken')||'')===WH.resetToken;}
+function saveProjectValue(k,v){
+  if(!projectStorageCurrent() || (WH && WH.resetting)) return false;
+  try{localStorage.setItem(k,v);return true;}catch(e){return false;}
+}
+function saveLS(k,v){return saveProjectValue("pryan."+k,JSON.stringify(v));}
 function loadLS(k){ try{ const j=JSON.parse(localStorage.getItem("pryan."+k)||"null"); return j; }catch(e){ return null; } }
 
 /* 规则库版本：升级后自动换成新默认，避免旧的本地规则把新口径挡住 */
@@ -1685,7 +1809,8 @@ function scheduleManualRetry(){
   __mTimer=setTimeout(function(){ if(__mDirty) flushManual("retry"); }, 4000);
 }
 window.addEventListener("beforeunload", function(e){
-  if(__mPending || __mDirty){
+  saveWorkspace();
+  if(!WH.resetting && (__mPending || __mDirty || WH.writes || S.busy || Object.keys(importPending).length)){
     const msg="人工确认还在写入数仓，确定离开吗？";
     e.preventDefault(); e.returnValue=msg; return msg;
   }
@@ -3742,39 +3867,20 @@ async function readMany(fileList, hintKind, opts){
     S.mScope="batch"; S.batchDone=false;
   }
   if(okPlan) commitPlan(pack.plan.rows, pack.plan.meta, pack.plan.items, pack.plan.dup);
-  /* 先确保落库成功再整体刷新，避免「导入完马上下钻分析还是空图」 */
-  const thisLog=log.slice();                 /* 本次解析结果：刷新后仍只展示这一批的文件 */
   /* 文件名按「本次实际导入成功的文件」取名，多个文件时就记「N 个文件」，
      与页面显示的批次名保持一致，避免出现「csv 的名字配 31 笔 xlsx 数据」 */
   const _batchName=function(items){
     const a=(items||[]).filter(function(x){ return x.ok; }).map(function(x){ return x.name; });
     return a.length>1?(a.length+" 个文件"):(a[0]||"上传文件");
   };
-  const imp=[];
-  if(okFlow) imp.push(WH.pushImport("flow", _batchName(pack.flow.items), pack.flow.rows));
-  if(okPlan) imp.push(WH.pushImport("plan", _batchName(pack.plan.items), pack.plan.rows));
-  if(okFlow && window.WH_REFRESH){
-    Promise.all(imp).then(function(res){
-      const r0=(res||[]).filter(Boolean)[0];
-      const dup=!!(r0 && r0.duplicated);          /* 后端：一行都没写进去 = 内容完全重复 */
-      return window.WH_REFRESH().then(function(){
-        if(dup){
-          /* 重复导入：不留申请记录、不留预览痕迹，只提示一下，页面回到空白可继续上传 */
-          S.doneMsg=null; S.doneErr=false;
-          try{ S.lastImport=null; }catch(e0){}
-          try{ S.raw.fileLog=[]; S.raw.flowFail=[]; }catch(e1){}
-          flash("导入失败：该文件内容与数仓已有流水完全重复，没有新增任何记录", true);
-        }else{
-          try{ S.raw.fileLog=thisLog; }catch(e1){}
-          const nm=thisLog.length>1?`${thisLog.length} 个文件`:((thisLog[0]&&thisLog[0].name)||"上传文件");
-          S.doneErr=false;
-          S.doneMsg=`已导入：${nm}（${okFlow} 笔）`;
-        }
-        try{ renderStepBody(); }catch(e2){}
-        try{ if(typeof showTab==="function") showTab(S.tab||"p0"); }catch(e3){}
-      });
-    });
-  }
+  const thisLog=log.slice();                 /* 本次解析结果：刷新后仍只展示这一批的文件 */
+  if(okFlow) importPending.flow={kind:'flow',fileName:_batchName(pack.flow.items),rows:pack.flow.rows};
+  if(okPlan) importPending.plan={kind:'plan',fileName:_batchName(pack.plan.items),rows:pack.plan.rows};
+  storeImportDrafts();
+  /* 先确保落库成功再整体刷新（flushImports 内部已 await WH_REFRESH），
+     避免「导入完马上下钻分析还是空图」；回包里带后端判重结果用于区分重复导入 */
+  const flushRes=await flushImports();
+  const _dup=((flushRes&&flushRes.results)||[]).some(function(r){ return r && r.duplicated; });
   S.lastImport = {
     ok: true,
     files: files.length,
@@ -3783,12 +3889,22 @@ async function readMany(fileList, hintKind, opts){
     rows: okFlow, planRows: okPlan, dup: pack.flow.dup + pack.plan.dup,
     cross: (okPlan > 0 && hintKind === "flow") || (okFlow > 0 && hintKind === "plan")
   };
-  /* 有数仓时，成功提示等后端判重结果回来再定（重复导入不能提示「已导入」） */
-  if(okFlow && !window.WH_REFRESH){
-    const nm=(S.raw.flow&&S.raw.flow.name)||"上传文件";
+  if(!flushRes || flushRes.ok===false){
+    /* 落库失败：workspaceStatus 已提示并露出「重试保存」，草稿保留，这里不报成功 */
+    S.doneMsg=null; S.doneErr=false;
+  }else if(_dup){
+    /* 重复导入：不留申请记录、不留预览痕迹，只提示一下，页面回到空白可继续上传 */
+    S.doneMsg=null; S.doneErr=false;
+    try{ S.lastImport=null; }catch(e0){}
+    S.raw.fileLog=[]; S.raw.flowFail=[];
+    flash("导入失败：该文件内容与数仓已有流水完全重复，没有新增任何记录", true);
+  }else if(okFlow){
+    /* 成功提示等后端判重结果回来再定（重复导入不能提示「已导入」） */
     S.doneErr=false;
+    const nm=thisLog.length>1?`${thisLog.length} 个文件`:((thisLog[0]&&thisLog[0].name)||"上传文件");
     S.doneMsg=`已导入：${nm}（${okFlow} 笔）`;
   }
+  saveWorkspace();
   renderStepBody();
 }
 
@@ -4245,7 +4361,7 @@ function exportManual(){
   download("人工匹配确认结果.csv",[head,...body].join("\n"));
 }
 
-showTab("p0");
+showTab(/^p[0-8]$/.test(S.tab)?S.tab:"p0");
 </script>
 </body>
 </html>

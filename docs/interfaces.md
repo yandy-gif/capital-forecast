@@ -23,6 +23,8 @@
 
 ## 写入
 
+首次重置后，所有 POST 请求需携带 `X-Reset-Token`，值取自 `GET /api/rows` 的 `resetToken`。页面自动携带本页已加载的版本；旧版本请求返回 409，需刷新后重试。重置、备份与普通 HTTP 读写串行执行，避免正在导入的数据在重置完成后重新落库。
+
 | 路径（POST） | 主要请求字段 | 用途 |
 | --- | --- | --- |
 | `/api/import` | `kind: flow或plan, fileName, rows, actor` | 流水/旧计划导入 |
@@ -32,6 +34,7 @@
 | `/api/rules` | `payload` | 完整规则数组序列化字符串 |
 | `/api/requests` | `action:add或status` 与对应记录字段 | 创建申请或修改状态 |
 | `/api/clear` | `kind:flow或plan或manual` | 清空指定类别；仅供明确需要清理的本地操作 |
+| `/api/reset` | `confirm:"RESET_ALL", browserState` | 备份后清空全部测试内容并恢复初始配置，返回 `resetToken, backup` |
 | `/api/upload-plan` | 二进制 XLSX，见下文 | 创建草稿，可自动提交 |
 | `/api/submission-action` | `id, action, actor, role, reason, force` | 状态推进，actor 必填 |
 | `/api/params` | `params, actor` | 对象更新已有值；数组可写完整参数定义 |

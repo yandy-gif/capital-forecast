@@ -128,6 +128,8 @@ def save_flow(rows, file_name="上传文件", batch=None):
     入库前按业务键与库内已有流水比对，重复的不再插入，避免反复上传同一份文件把金额翻倍。"""
     batch = batch or new_batch()
     conn = connect()
+    # 同一文件重导会走 UPDATE ... edited_at=...，全新库必须先补上这两列，否则报 no such column
+    _ensure_flow_edit_schema(conn)
     exist = set()
     for r in conn.execute("SELECT row_json FROM ods_flow"):
         try:
@@ -136,15 +138,26 @@ def save_flow(rows, file_name="上传文件", batch=None):
             pass
     # 同一文件之前导过的行（按 file_name + row_no 定位）→ 重导时原地覆盖，不新增一行
     same = {}
-    for x in conn.execute("SELECT id, row_no FROM ods_flow WHERE file_name=?", (file_name,)):
-        same[x["row_no"]] = x["id"]
+    for x in conn.execute("SELECT id, row_no, row_json FROM ods_flow WHERE file_name=?", (file_name,)):
+        same[x["row_no"]] = (x["id"], x["row_json"] or "{}")
     n = 0
     upd = 0
     skipped = 0
     for i, r in enumerate(rows, 1):
         k = flow_key(r)
-        rid = same.get(i)
-        if rid:
+        hit = same.get(i)
+        if hit:
+            rid, old_json = hit
+            # 内容没变就是「重复上传同一份文件」：不写库、不计入 updated，
+            # 这样调用方能把整批判定为 duplicated 而不留下申请记录。
+            try:
+                unchanged = json.loads(old_json) == r
+            except Exception:
+                unchanged = False
+            if unchanged:
+                skipped += 1
+                exist.add(k)
+                continue
             conn.execute("UPDATE ods_flow SET batch=?, row_json=?, edited_at=NULL, edited_by=NULL WHERE id=?",
                          (batch, json.dumps(r, ensure_ascii=False), rid))
             upd += 1

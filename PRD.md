@@ -130,6 +130,12 @@ POST /api/import ──► ods_flow（row_json 原文，只追加不覆盖）
 | 部分文件成功、部分失败 | 成功的正常入库并生成记录 | 是（按实际写入行数） | 上传结果里逐文件标注 |
 
 > 判断「是否重复」的最终依据是后端 `save_flow` 的有效写入行数（`rows + updated`），为 0 即视为整批重复。
+>
+> 其中 `updated` 只统计**内容真的变了**的原地覆盖：同名文件按 `file_name + row_no` 定位到旧行后，
+> 先比较 `row_json` 是否与旧值一致，一致就计入 `skipped`（视为重复上传，不写库、不留申请记录），
+> 不一致才执行 `UPDATE` 并计入 `updated`。所以「原样重传」和「改完内容再传」能区分开。
+> 另外 `save_flow` 会先调用 `_ensure_flow_edit_schema()` 补齐 `ods_flow.edited_at/edited_by`，
+> 否则全新库上一次重导就会因缺列报 `no such column`（已加回归测试）。
 
 #### 4.1.4 申请记录
 
