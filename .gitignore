@@ -34,3 +34,6 @@ venv/
 .codex/
 .DS_Store
 Thumbs.db
+
+# 本地备份目录（大改前的快照，不入库）
+_local_backup_*/

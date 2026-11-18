@@ -68,6 +68,32 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(saved),1)
         self.assertEqual(saved[0]['金额'],100)
 
+    def test_reimport_same_file_updates_rows_without_extra_request(self):
+        """全新库上重导同一文件会走 UPDATE 分支：不能因 ods_flow 缺 edited_at 列报错。
+        内容没变（原样重传 / 换文件名）→ 判为重复，不写库、不留申请记录；
+        内容变了 → 原地覆盖并留一条导入记录。两种情况都不新增流水。"""
+        rows=[{'交易日期':'2026-11-01','收支方向':'收','金额':100,'对方户名':'测试客户'}]
+        code,first=self.call('/api/import',{'kind':'flow','fileName':'dup.csv','rows':rows})
+        self.assertEqual(code,200,first)
+        self.assertEqual(first['rows'],1)
+        self.assertFalse(first['duplicated'])
+        code,same=self.call('/api/import',{'kind':'flow','fileName':'dup.csv','rows':rows})
+        self.assertEqual(code,200,same)
+        self.assertTrue(same['duplicated'],same)
+        self.assertEqual(same['updated'],0)
+        code,other=self.call('/api/import',{'kind':'flow','fileName':'dup-copy.csv','rows':rows})
+        self.assertEqual(code,200,other)
+        self.assertTrue(other['duplicated'],other)
+        self.assertEqual(len(self.call('/api/rows')[1]['flow']),1)
+        self.assertEqual(len(self.call('/api/requests')[1]['rows']),1)
+        changed=[dict(rows[0],金额=200)]
+        code,upd=self.call('/api/import',{'kind':'flow','fileName':'dup.csv','rows':changed})
+        self.assertEqual(code,200,upd)
+        self.assertEqual(upd['updated'],1)
+        self.assertFalse(upd['duplicated'])
+        self.assertEqual(len(self.call('/api/rows')[1]['flow']),1)
+        self.assertEqual(len(self.call('/api/requests')[1]['rows']),2)
+
     def test_reset_requires_confirmation_and_preserves_data_when_cancelled(self):
         db.save_flow([{'交易日期':'2026-11-01','收支方向':'收','金额':100,'对方户名':'测试客户'}])
         code, result = self.call('/api/reset', {})

@@ -101,16 +101,26 @@ test('save-only button does not announce success when the request fails',async()
   }finally{h.close();}
 });
 
-test('failed batch label edits retain their draft across a page refresh',async()=>{
+test('failed label writes keep the edit and survive a page refresh',async()=>{
+  /* 「发起修改」草稿模式已下线：下拉一改就直接写数仓，不再有 mPend 暂存层。
+     但写库失败时改动不能丢——仍要留在本地副本（pryan.manual）里，刷新后还在，
+     只是不能报告「已保存」。 */
   const h=await boot({fail:true});let store;
   try{
-    h.state.S.mMode=true;h.state.S.mPend={[key]:label};h.state.S.mPendRaw={};h.state.S.mSel={0:true};
-    h.state.DATA.actAll=[['2026.08','2026-08-01','支',100,'测试客户','','管理费用','','','经营活动',1,'test']];
-    assert.equal((await h.state.saveSelected()).ok,false);
-    store=h.store();assert.deepEqual(clone(h.state.S.mPend[key]),label);
+    h.state.S.manual[key]=label;
+    h.state.saveManual();
+    await h.w.WH.pushManual({[key]:label}).catch(()=>{});
+    assert.equal(h.state.S.manualSaved,undefined);      /* 失败不报告已保存 */
+    assert.equal(h.state.S.mMode,false);                /* 不再有草稿模式 */
+    store=h.store();
+    assert.deepEqual(clone(h.state.S.manual[key]),label);
+    assert.match(store['pryan.manual']||'',/管理费用/);  /* 本地副本已落盘 */
   }finally{h.close();}
   const r=await boot({store});
-  try{assert.deepEqual(clone(r.state.S.mPend[key]),label);assert.equal(r.state.S.mMode,true);}finally{r.close();}
+  try{
+    assert.deepEqual(clone(r.state.S.manual[key]),label);
+    assert.equal(r.state.S.mMode,false);
+  }finally{r.close();}
 });
 
 test('pending custom rules survive server reload and rapid edits',async()=>{

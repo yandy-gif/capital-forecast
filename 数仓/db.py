@@ -88,12 +88,20 @@ def _flow_dir(v):
     return t
 
 
+def _bal_str(v):
+    """余额归一化：把 715000 / 715000.0 / 715,000 视为同一个值，避免不同来路（csv 与 xlsx）判不出重复。"""
+    if v is None or str(v).strip() == "":
+        return ""
+    return _amt_str(v)
+
+
 def flow_key(r):
     """去重键，按可靠性降级：
     1) 银行流水号（唯一，最可靠）
     2) 交易时间（到秒）+ 方向 + 金额 —— 同日同额的真实多笔时间不同，不会被误合并
     3) 余额 + 方向 + 金额 —— 同一账户余额逐笔变化
     4) 日期+方向+金额+对方+摘要 —— 最后兜底（可能误合并同日同额同摘要的多笔手续费）
+    余额与金额统一转成数值再拼键，避免 "2000" 与 "2000.0" 被当成两笔。
     """
     d = str(r.get("交易日期") or r.get("日期") or "").strip()
     di = _flow_dir(r.get("收支方向") or r.get("方向"))
@@ -102,10 +110,10 @@ def flow_key(r):
     if sn:
         return ("S", sn)
     ts = str(r.get("交易时间") or "").strip()
-    bal0 = str(r.get("余额") or "").strip()
+    bal0 = _bal_str(r.get("余额"))
     if ts:
         return ("T", d, ts, di, amt, bal0)
-    bal = str(r.get("余额") or "").strip()
+    bal = _bal_str(r.get("余额"))
     if bal:
         return ("B", d, bal, di, amt)
     return (
@@ -120,6 +128,8 @@ def save_flow(rows, file_name="上传文件", batch=None):
     入库前按业务键与库内已有流水比对，重复的不再插入，避免反复上传同一份文件把金额翻倍。"""
     batch = batch or new_batch()
     conn = connect()
+    # 同一文件重导会走 UPDATE ... edited_at=...，全新库必须先补上这两列，否则报 no such column
+    _ensure_flow_edit_schema(conn)
     exist = set()
     for r in conn.execute("SELECT row_json FROM ods_flow"):
         try:
@@ -128,15 +138,26 @@ def save_flow(rows, file_name="上传文件", batch=None):
             pass
     # 同一文件之前导过的行（按 file_name + row_no 定位）→ 重导时原地覆盖，不新增一行
     same = {}
-    for x in conn.execute("SELECT id, row_no FROM ods_flow WHERE file_name=?", (file_name,)):
-        same[x["row_no"]] = x["id"]
+    for x in conn.execute("SELECT id, row_no, row_json FROM ods_flow WHERE file_name=?", (file_name,)):
+        same[x["row_no"]] = (x["id"], x["row_json"] or "{}")
     n = 0
     upd = 0
     skipped = 0
     for i, r in enumerate(rows, 1):
         k = flow_key(r)
-        rid = same.get(i)
-        if rid:
+        hit = same.get(i)
+        if hit:
+            rid, old_json = hit
+            # 内容没变就是「重复上传同一份文件」：不写库、不计入 updated，
+            # 这样调用方能把整批判定为 duplicated 而不留下申请记录。
+            try:
+                unchanged = json.loads(old_json) == r
+            except Exception:
+                unchanged = False
+            if unchanged:
+                skipped += 1
+                exist.add(k)
+                continue
             conn.execute("UPDATE ods_flow SET batch=?, row_json=?, edited_at=NULL, edited_by=NULL WHERE id=?",
                          (batch, json.dumps(r, ensure_ascii=False), rid))
             upd += 1

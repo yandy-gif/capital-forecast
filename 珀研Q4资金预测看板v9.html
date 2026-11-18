@@ -251,12 +251,11 @@ footer{font-size:11px;color:var(--muted);border-top:1px solid var(--line);paddin
 
   <div class="grid g2">
     <div class="card">
-      <h3>三大活动净额 <span>经营 / 投资 / 筹资</span></h3>
+      <h3>收支结构（按分类） <span>流入 / 流出 / 净额 / 笔数</span></h3>
       <div id="act3"></div>
-      <div class="note">投资与筹资仅实绩侧有数据（投资及内部划转），计划侧目前全部落在经营活动，需在计划模板中补活动分类字段。</div>
     </div>
     <div class="card">
-      <h3>本月 / 下月缺口判断 <span>滚动口径</span></h3>
+      <h3>逐月资金滚动 <span>数仓实际流水 · 月末余额与安全线判断</span></h3>
       <div id="gapbox"></div>
     </div>
   </div>
@@ -280,8 +279,10 @@ footer{font-size:11px;color:var(--muted);border-top:1px solid var(--line);paddin
     <div class="card">
       <h3>三级穿透 · 打标明细（与「收支明细」同口径） <span id="penCount"></span></h3>
       <div class="filters" style="margin-top:6px">
+        <select id="penMonth"><option value="all">全部月份</option></select>
+        <select id="penDir"><option value="all">收 + 支</option><option value="收">只看收入</option><option value="支">只看支出</option></select>
         <span style="font-size:11.5px;color:#6B7280">金额 ≥</span>
-        <input id="thr" type="range" min="0" max="300" step="10" value="0" style="width:150px">
+        <input id="thr" type="range" min="0" max="300" step="10" value="0" style="width:120px">
         <b id="thrval" style="font-size:12px;color:#1F3864">0 万</b>
         <select id="penSrc"><option value="act">实际流水</option><option value="plan">计划底仓</option></select>
       </div>
@@ -420,6 +421,8 @@ var WH = {
   },
   pushRules(rules){ if(!this.on) return Promise.resolve({ok:false}); return this.post("/api/rules", {payload: JSON.stringify(rules||[])}); },
   pushImport(kind, fileName, rows){
+    /* 走草稿 + flushImports：落库失败时草稿留在本机、刷新可恢复；
+       flushImports 内部 await WH_REFRESH()，所以返回的 Promise 兑现时数据已可查询 */
     if(!rows || !rows.length) return Promise.resolve({ok:false});
     importPending[kind]={kind,fileName,rows};
     storeImportDrafts();
@@ -512,11 +515,13 @@ function flushImports(){
   if(!Object.keys(importPending).length) return Promise.resolve({ok:true});
   if(!WH.on || WH.resetting){workspaceStatus("数仓未连接，导入数据未保存；本机草稿已保留。");return Promise.resolve({ok:false});}
   importSaving=(async()=>{
+    const results=[];
     try{
       while(Object.keys(importPending).length){
         const kind=Object.keys(importPending)[0], sent=JSON.stringify(importPending[kind]);
         workspaceStatus("正在保存导入数据，请稍候…");
         const result=await WH.post('/api/import',JSON.parse(sent));
+        results.push(result);
         if(!result || !result.ok) throw new Error((result&&result.error)||'保存失败');
         if(JSON.stringify(importPending[kind])===sent) delete importPending[kind];
         storeImportDrafts();
@@ -524,7 +529,8 @@ function flushImports(){
       document.getElementById('retryImport').hidden=true;
       workspaceStatus("导入数据已保存，刷新后仍会保留。");
       if(window.WH_REFRESH) await window.WH_REFRESH();
-      return {ok:true};
+      /* 把每个批次的落库回包带出去：调用方据此判断是否「内容完全重复（一行没写）」 */
+      return {ok:true,results:results};
     }catch(e){
       workspaceStatus("导入保存失败："+e.message+"；请重试保存，刷新会恢复尚未保存的草稿。");
       document.getElementById('retryImport').hidden=false;
@@ -830,15 +836,20 @@ function renderP0(){
 
 function renderSteps(){
   const st=document.getElementById("steps");
-  st.innerHTML=STEPS.map((t,i)=>{
+  /* data-step 只用于布局重编号；点击不跳转，进入人工审核必须点页面上的「下一步：人工审核」 */
+  st.innerHTML=STEPS.map(function(t,i){
     const n=i+1, done=n<S.step, cur=n===S.step;
-    return `<div class="step ${done?"done":""} ${cur?"cur":""}" data-step="${n}">
+    return `<div class="step ${done?"done":""} ${cur?"cur":""}" data-step="${n}" style="cursor:default">
       <b>${done?"✓":n}</b><span>${t}</span></div>`;
   }).join('<i class="arrow">›</i>');
 }
 
 function renderStepBody(){
   const b=document.getElementById("stepBody");
+  const _prevStep=S.__prevStep;
+  S.__prevStep=S.step;
+  /* 每次从别的步骤进入人工审核，都先落到「未匹配」视图 */
+  if(S.step===3 && _prevStep!==3) S.mFilter="un";
   if(S.company!=="珀研"){
     b.innerHTML=`<div class="banner"><div><b>${S.company} 暂无数据</b>：该主体尚未导入流水与资金计划。
       请在下方导入，或切换到「珀研生物」查看已建好的看板。</div></div>
@@ -862,40 +873,34 @@ function dzCard(kind){
     <h3>${isAct?"导入银行流水":"导入资金计划"} <span>可一次选多个文件 · xlsx / csv</span></h3>
     <div class="dz" id="dz_${kind}"><b>拖入或点击上传${isAct?"银行流水":"资金计划"}</b>
       <small>支持多选、支持多银行不同模板；按内容自动识别列名与表头位置，识别后自动合并去重</small></div>
-    ${S.busy?`<div class="busyBar" style="margin-top:8px;font-size:12px;color:#1F3864">正在解析 ${S.busy.done+1}/${S.busy.n}：${esc(S.busy.name)} …</div>`:'<div class="busyBar"></div>'}
+    ${S.busy
+      ? `<div class="busyBar" style="margin-top:8px;font-size:12px;color:#1F3864">正在解析 ${S.busy.done+1}/${S.busy.n}：${esc(S.busy.name)} …</div>`
+      : (function(){
+          /* 只保留一条结果提示：导入/失败/重置/归档；不再重复显示「已上传 · N 笔」这类汇总 */
+          let tip="", bad=false;
+          if(isAct && S.doneMsg){ tip=S.doneMsg; bad=!!S.doneErr; }
+          else if(S.resetMsg && S.resetMsg.indexOf(kind)===0){ tip=S.resetMsg; }
+          if(!tip) return '<div class="busyBar"></div>';
+          return `<div class="busyBar" style="margin-top:8px;font-size:12px;color:${bad?"#C0392B":"#2E8B57"}"><b>${bad?"✗":"✓"} ${esc(tip)}</b></div>`;
+        })()}
     <div style="display:flex;gap:8px;margin-top:10px">
       ${isAct?"":`<button class="btn ghost" data-tpl="plan">下载计划模板</button>`}
       ${((isAct?S.raw.flow:S.raw.plan))?`<button class="btn ghost${S.resetArm===kind?" danger":""}" data-reset="${kind}">${S.resetArm===kind?"确认重置预览？存档保留":"重置导入预览"}</button>`:""}
       ${(isAct&&S.raw.flow)?`<button class="btn" data-newbatch="1">＋ 重新发起（导入新一批）</button>`:""}
-      ${(isAct&&DATA.actMeta&&DATA.actMeta.rows)?`<button class="btn ghost" data-arch="1">✎ 修改已存档流水（${DATA.actMeta.rows} 笔）</button>`:""}
+      ${(isAct&&DATA.actMeta&&DATA.actMeta.rows)?`<button class="btn ghost" data-arch="1">✎ 修改已存档流水（本批 ${mBatchRows().length} 笔）</button>`:""}
     </div>
     ${isAct?'<div style="margin-top:14px"><h3 style="font-size:13px;color:#1F3864;margin:0 0 4px">申请记录 <span style="font-weight:400;color:#6B7280;font-size:11.5px">每次导入 / 修改留一条，点「确认完成」表示这一笔已核对</span></h3><div id="reqBox1"></div></div>':""}
     ${isAct?'<div id="archBox" style="display:none;margin-top:10px"></div>':""}
-    <div class="note" id="hint_${kind}">${(function(){
-      const st=isAct?S.raw.flow:S.raw.plan;
-      if(S.resetMsg && S.resetMsg.indexOf(kind)===0) return `<b class="green">✓ ${esc(S.resetMsg)}</b>`;
-      if(!st) return isAct?`数仓现有：${DATA.actMeta.rows} 笔，打标率 ${DATA.cov.tagged}%`
-                          :`数仓现有：${DATA.plan.length} 行`;
-      const nOk=(st.items||[]).filter(i=>i.ok).length;
-      const bits=[esc(st.name), st.rows.length+(isAct?" 笔":" 行")];
-      if(st.dup) bits.push(`已去重 ${st.dup} 条`);
-      if(nOk<=1 && isAct){
-        if(st.meta&&st.meta.enc) bits.push(esc(st.meta.enc));
-        if(st.meta&&st.meta.sheetName) bits.push("工作表 "+esc(st.meta.sheetName));
-      }else if(nOk>1){
-        bits.push("多模板自动合并");
-      }
-      return `<b class="green">✓ 已上传</b>　`+bits.join(" · ");
-    })()}</div>
   </div>`;
 }
 
 /* ===== 申请记录台账（导入 / 修改各留一条；数据只有一份，改就是覆盖） ===== */
 function reqStatusTag(s){
+  /* 导入/归档后自动落一条记录，默认是「未确认」；人工点确认后变「已确认」 */
   if(s==="已确认") return '<span class="tag t-ok">已确认</span>';
   if(s==="已作废") return '<span class="tag t-gray">已作废</span>';
-  if(s==="进行中") return '<span class="tag t-gray">进行中</span>';
-  return '<span class="tag t-warn">已完成</span>';
+  if(s==="进行中") return '<span class="tag t-gray">未确认</span>';
+  return '<span class="tag t-warn">未确认</span>';
 }
 function reqTable(rows, tag){
   if(!rows || !rows.length) return '<div class="note">'+(tag==="2"
@@ -945,9 +950,23 @@ function captureArchiveDraft(){
   archiveDrafts[row.rid]=values;saveLS("archiveDrafts",archiveDrafts);
 }
 ["input","change"].forEach(type=>document.addEventListener(type,e=>{if(e.target.closest("#archForm [data-a]"))captureArchiveDraft();}));
+/* 存档编辑表单里的下拉也带「＋ 新增…」，选中时让用户输入新值，避免把 "__new__" 存进数仓 */
+document.addEventListener("change",function(e){
+  const s=e.target;
+  if(!s || s.tagName!=="SELECT" || !s.closest || !s.closest("#archForm")) return;
+  if(s.value!=="__new__") return;
+  const what=({l1:"一级科目",l2:"明细科目",cf:"现金流量分类"})[s.dataset.a]||"值";
+  let v=null;
+  try{ v=window.prompt("输入新的"+what); }catch(e0){ v=null; }
+  v=(v||"").trim();
+  if(v){ s.add(new Option(v,v)); s.value=v; }
+  else { s.value=""; }
+  captureArchiveDraft();
+});
 function archRows(){
   const kw=(S.archKw||"").trim();
-  let all=mAllRows();
+  /* 默认只看本批（最近一次导入）；需要翻历史时点「查看全部存档」 */
+  let all=(S.archScope==="all")?mAllRows():mBatchRows();
   if(kw) all=all.filter(function(r){ return (String(r.cp)+String(r.memo)).indexOf(kw)>=0; });
   const desc=(S.archSort!=="asc");       /* 默认按时间倒序：最新一笔在最上 */
   return all.slice().sort(function(a,b){
@@ -974,7 +993,8 @@ function renderArch(){
   const EI="border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:12px;font-family:inherit";
   b.innerHTML=`<div style="border:1px solid var(--line);border-radius:8px;padding:10px;background:#FBFCFE">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <b style="font-size:12.5px;color:#1F3864">已存档流水 ${rs.length}/${tot} 笔 · 未提交草稿 ${Object.keys(archiveDrafts).length} 笔</b>
+      <b style="font-size:12.5px;color:#1F3864">${S.archScope==="all"?"全部存档":"本批"} ${rs.length} 笔${S.archScope==="all"?"":`（全部存档 ${tot} 笔）`} · 未提交草稿 ${Object.keys(archiveDrafts).length} 笔</b>
+      <button class="chip" data-ascope="1">${S.archScope==="all"?"只看本批":"查看全部存档"}</button>
       <input id="archKw" value="${esc(S.archKw||"")}" placeholder="搜对方户名 / 摘要" style="${EI};width:180px">
       <span style="font-size:11.5px;color:#6B7280">按时间${(S.archSort==="asc")?"正序":"倒序"}，一笔一笔改；保存即覆盖数仓原记录（不新增、不重复）</span>
       <button class="chip" data-asort="1">切换${(S.archSort==="asc")?"倒序":"正序"}</button>
@@ -1011,10 +1031,11 @@ function renderArch(){
             let k=-1; for(let i=0;i<list.length;i++){ if(list[i].i===cur){ k=i; break; } }
             return (k>=0?(k+1):"—")+" / "+list.length;
           })()} 笔（当前顺序）</span>
-          <span style="margin-left:10px;font-size:11.5px;color:#6B7280">同类多笔要改，可以先去人工审核用「发起修改」批量勾选</span>
+          <span style="margin-left:10px;font-size:11.5px;color:#6B7280">改完点「保存并覆盖」直接写回数仓；「上一笔 / 下一笔」可继续逐笔改</span>
         </div>
       </div>`;
     })()}
+    ${S.archEdit==null?`
     <div style="max-height:380px;overflow:auto;margin-top:8px">
       <table><thead><tr><th style="width:86px">日期</th><th style="width:44px">方向</th><th style="width:92px">金额</th>
         <th style="text-align:left">对方户名</th><th style="text-align:left">摘要</th>
@@ -1030,7 +1051,10 @@ function renderArch(){
           <td>${r.rid?`<button class="btn ghost" data-aedit="${r.i}" style="padding:2px 8px;font-size:11px">编辑</button>`:'<span style="color:#C7D2E4">—</span>'}</td>
         </tr>`;
       }).join("")}</tbody></table>
-    </div>
+    </div>`:`
+    <div style="margin-top:8px;font-size:11.5px;color:#6B7280">
+      当前只显示这一笔，流水列表已收起。改完点「保存并覆盖」写回数仓（覆盖原记录，不新增）；点「取消」回到列表。
+    </div>`}
   </div>`;
   const edited=mRowAt(S.archEdit),draft=edited && archiveDrafts[edited.rid];
   if(draft) b.querySelectorAll("[data-a]").forEach(el=>{
@@ -1060,7 +1084,10 @@ function saveArch(i){
   });
   const st0=mState(r);
   if(label.l1===st0.l1 && label.l2===st0.l2 && label.cf===st0.cf) label={};
-  if(!Object.keys(patch).length && !Object.keys(label).length){ alert("这一笔没有改动"); return; }
+  if(!Object.keys(patch).length && !Object.keys(label).length){
+    flash("没有需要保存的改动：表单里的值和你当前的记录完全一致", true);
+    return;
+  }
   const base=(typeof API!=="undefined"?API:"");
   return fetch(base+"/api/flow-edit",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({id:r.rid, patch:patch, label:label,
@@ -1076,12 +1103,11 @@ function saveArch(i){
     S.applyInfo=applyFlow(S.raw.flow.rows,"all");
     renderArch();
     scheduleRecompute();
-    fetch(base+"/api/requests",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"add", kind:"edit", title:"修改存档流水：修改 1 笔",
-        rows:1, status:"已完成", actor:(localStorage.getItem("eco.actor")||"本地用户"),
-        note:"覆盖原记录（UPDATE，不新增）"})}).then(function(){ renderReqBoxes(); }).catch(function(){});
-    toast2("✓ 已覆盖数仓原记录："+(d.changed||[]).map(function(c){ return c.field+"「"+(c.old||"—")+"」→「"+(c.new||"—")+"」"; }).join("；")+
-           (d.label&&d.label.l1?"；科目→"+d.label.l1+(d.label.l2?"/"+d.label.l2:""):""));
+    /* 存档修改不再往「申请记录」里加条：申请记录只留导入批次，单笔修改痕迹在「记录」里看 */
+    var _msg="✓ 已覆盖数仓原记录："+(d.changed||[]).map(function(c){ return c.field+"「"+(c.old||"—")+"」→「"+(c.new||"—")+"」"; }).join("；")+
+           (d.label&&d.label.l1?"；科目→"+d.label.l1+(d.label.l2?"/"+d.label.l2:""):"");
+    flash(_msg);
+    toast2(_msg);
     flushManual("update");
   })
   .catch(function(){ alert("保存失败：确认数仓服务在运行"); });
@@ -1115,41 +1141,60 @@ function step1(){
   return `<div class="grid g2">${dzCard("流水")}${dzCard("计划")}</div>
 
   <div class="card" style="margin-bottom:14px">
-    <h3>① 上传结果 <span>流水是必填项：先导入银行流水，打标与看板才有数据</span></h3>
+    <h3>① 上传结果 <span>只看本次导入的解析结果：流水是必填项，打标与看板才有数据</span></h3>
     <table style="margin-top:8px">
-      <thead><tr><th style="text-align:left">数据源</th><th style="text-align:left">文件</th><th>状态</th><th style="text-align:left">解析结果</th></tr></thead>
-      <tbody>
-        ${row(!!f, "银行流水", f?esc(f.name):"—", flowStat)}
-        ${row(!!pl, "资金计划", pl?esc(pl.name):"—", planStat)}
-      </tbody></table>
+      <thead><tr><th style="text-align:left">文件</th><th>自动识别为</th><th>数据量</th><th style="text-align:left">识别到的字段</th><th>状态</th></tr></thead>
+      <tbody>${(()=>{
+        const log=S.raw.fileLog||[];
+        if(log.length){
+          return log.map(it=>{
+            const nm=esc(it.name||it.file_name||"上传文件");
+            const isPlan=it.kind==="plan";
+            const kindTag=isPlan?'<span class="tag t-gray">资金计划</span>'
+                                :'<span class="tag t-in">银行流水</span>';
+            if(it.ok===false){
+              return `<tr>
+                <td style="text-align:left;font-size:11.5px">${nm}</td>
+                <td><span class="tag t-gray">未识别</span></td><td>—</td>
+                <td style="text-align:left;font-size:11px;color:#A5352A">${esc(it.reason||"解析失败")}${(it.heads&&it.heads.length)?`<br><span style="color:#9CA3AF">表头：${esc(it.heads.slice(0,10).join(" / "))}</span>`:""}</td>
+                <td><span class="tag t-bad">✗ 跳过</span></td></tr>`;
+            }
+            const n=(it.rows!=null?it.rows:(it.count!=null?it.count:0));
+            const fldTxt=it.fields?`${it.fields} 个字段`
+                       :((it.mappedHeads&&it.mappedHeads.length)?`${it.mappedHeads.length} 个字段`:"—");
+            const extra=[it.sheet?esc(it.sheet):"",it.enc?esc(it.enc):""].filter(Boolean).join(" · ");
+            return `<tr>
+              <td style="text-align:left;font-size:11.5px">${nm}</td>
+              <td>${kindTag}</td>
+              <td>${n} ${isPlan?"行":"笔"}</td>
+              <td style="text-align:left;font-size:11px;color:#6B7280">${esc(fldTxt)}${extra?" · "+extra:""}</td>
+              <td><span class="tag t-ok">✓ 已解析</span></td></tr>`;
+          }).join("");
+        }
+        const fb=[];
+        fb.push(`<tr><td style="text-align:left;font-size:11.5px">${f?esc(f.name):"—"}</td>
+          <td><span class="tag t-in">银行流水</span></td>
+          <td>${f?f.rows.length+" 笔":"—"}</td>
+          <td style="text-align:left;font-size:11px;color:#6B7280">${f&&f.meta&&(f.meta.mappedHeads||[]).length?(f.meta.mappedHeads||[]).length+" 个字段":"—"}</td>
+          <td>${f?'<span class="tag t-ok">已上传</span>':'<span class="tag t-gray">未导入</span>'}</td></tr>`);
+        fb.push(`<tr><td style="text-align:left;font-size:11.5px">${pl?esc(pl.name):"—"}</td>
+          <td><span class="tag t-gray">资金计划</span></td>
+          <td>${pl?pl.rows.length+" 行":"—"}</td>
+          <td style="text-align:left;font-size:11px;color:#6B7280">—</td>
+          <td>${pl?'<span class="tag t-ok">已上传</span>':'<span class="tag t-gray">未导入</span>'}</td></tr>`);
+        return fb.join("");
+      })()}</tbody></table>
     ${(()=>{
       const log=S.raw.fileLog||[];
-      if(!log.length) return "";
-      const okN=log.filter(x=>x.ok).length, badN=log.length-okN;
+      const okN=log.filter(x=>x.ok!==false).length, badN=log.length-okN;
       const dup=((f&&f.dup)||0)+((pl&&pl.dup)||0);
-      const rowsHtml=log.map(it=>it.ok
-        ? `<tr>
-        <td style="text-align:left;font-size:11.5px">${esc(it.name)}</td>
-        <td>${it.kind==="plan"?'<span class="tag t-gray">资金计划</span>':'<span class="tag t-in">银行流水</span>'}</td>
-        <td>${it.rows} ${it.kind==="plan"?"行":"笔"}</td>
-        <td style="text-align:left;font-size:11px;color:#6B7280">${it.fields||0} 个字段${it.sheet?" · "+esc(it.sheet):""}${it.enc?" · "+esc(it.enc):""}</td>
-        <td><span class="tag t-ok">✓ 成功</span></td></tr>`
-        : `<tr>
-        <td style="text-align:left;font-size:11.5px">${esc(it.name)}</td>
-        <td><span class="tag t-gray">未识别</span></td>
-        <td>—</td>
-        <td style="text-align:left;font-size:11px;color:#A5352A">${esc(it.reason||"解析失败")}${(it.heads&&it.heads.length)?`<br><span style="color:#9CA3AF">表头：${esc(it.heads.slice(0,10).join(" / "))}</span>`:""}</td>
-        <td><span class="tag t-bad">✗ 跳过</span></td></tr>`).join("");
-      return `<div style="margin-top:14px">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-          <b style="font-size:12.5px">② 文件明细</b>
-          <span style="font-size:11.5px;color:#6B7280">共 ${log.length} 个文件 · 成功 ${okN} · 跳过 ${badN}${dup?` · 合并去重 ${dup} 条`:""}</span>
-        </div>
-        <table><thead><tr><th style="text-align:left">文件名</th><th>自动识别为</th><th>数据量</th><th style="text-align:left">识别到的字段</th><th>状态</th></tr></thead>
-        <tbody>${rowsHtml}</tbody></table>
-        <div class="note" style="margin-top:8px">
-          不需要先合并文件：多个银行流水一起传，系统按内容自动判断哪份是流水、哪份是计划表，同一笔重复出现的会自动去重。跳过的文件不影响其它文件继续导入。</div>
-      </div>`;
+      const bits=[];
+      if(log.length) bits.push(`本次共 ${log.length} 个文件`);
+      if(log.length) bits.push(`成功 ${okN}`);
+      if(badN) bits.push(`跳过 ${badN}`);
+      if(dup) bits.push(`合并去重 ${dup} 条`);
+      const sum = bits.length?bits.join(" · "):(f?flowStat:planStat);
+      return `<div style="margin-top:8px;font-size:11.5px;color:#6B7280">${sum}</div>`;
     })()}
     <div class="note" style="margin-top:10px">
       支持 <b>xlsx / csv</b>，可多选、可分批追加；表头不必在第一行，会自动在前 12 行里找；列名支持常见别名（如「交易金额」「对方名称」「借贷标志」）。
@@ -1691,7 +1736,21 @@ function saveManualDraft(){
   saveLS("manualDraft",{pending:S.mPend||{},raw:S.mPendRaw||{},mode:!!S.mMode||Object.keys(S.mPendRaw||{}).length>0});
 }
 const __draft=loadLS("manualDraft")||{};
-S.mPend=__draft.pending||{};S.mPendRaw=__draft.raw||{};S.mMode=!!__draft.mode;S.mSel={};
+S.mPend=__draft.pending||{};S.mPendRaw=__draft.raw||{};S.mSel={};
+/* 「发起修改」入口已下线：历史草稿里的科目改动直接并入正式标注（随后落库），
+   避免因为按钮没了而把之前的暂存改动困在浏览器里；原始字段草稿不自动提交，防止误改流水 */
+S.mMode=false;
+try{
+  const _pk=Object.keys(S.mPend||{});
+  if(_pk.length){
+    _pk.forEach(function(k){ S.manual[k]=Object.assign({},S.manual[k]||{},S.mPend[k]); });
+    S.mPend={};
+    if(typeof saveManual==="function") saveManual();
+    setTimeout(function(){ try{ flushManual("draft-migrate"); }catch(e){} }, 800);
+  }
+  S.mPendRaw={};
+  saveLS("manualDraft",{pending:{},raw:{},mode:false});
+}catch(e){}
 let __selectionRestored=false;
 function restoreManualSelection(){
   if(__selectionRestored || !mAllRows().length) return;
@@ -1800,9 +1859,10 @@ function mBatchRows(){
   });
   return hit.length?hit:all;
 }
-function mScopeRows(){ return (S.mScope==="all") ? mAllRows() : mBatchRows(); }
+/* 人工审核只看「本批」（最近一次导入的批次）；历史流水走「修改已存档流水」逐笔改 */
+function mScopeRows(){ return mBatchRows(); }
 function mFiltered(){
-  const all=mScopeRows(), f=S.mFilter||"all", kw=(S.mKw||"").trim();
+  const all=mScopeRows(), f=S.mFilter||"un", kw=(S.mKw||"").trim();
   let rs=all;
   if(f==="un") rs=all.filter(function(r){ return !mState(r).ok; });
   if(f==="ok") rs=all.filter(function(r){ return mState(r).ok; });
@@ -1846,6 +1906,19 @@ function syncRowIds(){
 function toast2(msg){
   var tip=document.getElementById("mSaveTip");
   if(tip) tip.innerHTML='<span style="color:#2E8B57">'+esc(msg)+'</span>';
+}
+/* 通用浮层提示：在「导入流水 / 存档编辑」这类没有 mSaveTip 的页面也能看到保存结果 */
+function flash(msg, bad){
+  try{
+    var d=document.createElement("div");
+    d.style.cssText="position:fixed;right:24px;top:76px;z-index:99999;padding:10px 16px;border-radius:8px;"+
+      "font-size:12.5px;line-height:1.5;max-width:420px;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.2);background:"+
+      (bad?"#C0392B":"#2E8B57");
+    d.textContent=msg;
+    document.body.appendChild(d);
+    setTimeout(function(){ d.style.transition="opacity .4s"; d.style.opacity="0";
+      setTimeout(function(){ if(d.parentNode) d.parentNode.removeChild(d); }, 420); }, 2800);
+  }catch(e){}
 }
 function mFindRaw(rid){
   var rows=(S.raw && S.raw.flow && S.raw.flow.rows)||[];
@@ -1927,13 +2000,23 @@ async function saveSelected(){
     S.mSaving=false;renderManual();if(message)mStat(message,color);
   }
 }
+/* 只认人工编辑留下的记录：系统补齐（补余额列等）、导入自动生成的一律不显示 */
+function histIsManual(x){
+  const who=String((x&&x.actor)||"").trim();
+  const why=String((x&&x.reason)||"");
+  if(!who) return false;
+  if(/系统|规则|自动|批量补/.test(who)) return false;
+  if(/补回|系统补齐|自动填充/.test(why)) return false;
+  return true;
+}
+
 /* 看这一笔的修改记录 */
 function showRowHist(i){
   var r=mRowAt(i);
-  if(!r||!r.rid){ alert("这行还没有数仓行号：请先点「从数仓重新取数」"); return; }
+  if(!r||!r.rid){ alert("这行还没有数仓行号，请刷新页面后重试"); return; }
   var base=(typeof API!=="undefined"?API:"");
   fetch(base+"/api/flow-edits?id="+r.rid).then(function(x){ return x.json(); }).then(function(d){
-    S.mHist={rid:r.rid, cp:r.cp, d:r.d, rows:d.rows||[]};
+    S.mHist={rid:r.rid, cp:r.cp, d:r.d, rows:(d.rows||[]).filter(histIsManual)};
     renderManual();
     var box=document.getElementById("mHistBox");
     if(box) box.scrollIntoView({block:"nearest"});
@@ -1967,51 +2050,38 @@ function step3(){
   if(S.raw.flow && S.raw.flow.rows && S.raw.flow.rows.length && !S.raw.flow.rows[0]["__id"] && S.mIdSync!==1){
     S.mIdSync=1; setTimeout(function(){ syncRowIds(); }, 300);
   }
-  const ALLR=mScopeRows();
-  const ALLN=mAllRows().length;
+  const ALLR=mBatchRows();                 /* 只处理本批（最近一次导入） */
+  const ALLTOT=mAllRows().length;          /* 全部存档，仅用于提示 */
+  const ALLN=ALLR.length;
   const nUn=ALLR.filter(function(r){ return !mState(r).ok; }).length;
   const nOk=ALLR.length-nUn;
-  const isBatch=(S.mScope!=="all");
-  if(S.batchDone){
-    return `<div class="card">
-      <div class="banner ok"><div><b>本批已确认完成</b>：已写入数仓并留档。可以导入下一批流水了。</div></div>
-      <div style="margin-top:10px">
-        <button class="btn" data-newbatch="1">＋ 导入下一批</button>
-        <button class="btn ghost" data-scopeall="1" style="margin-left:8px">查看全部存档流水</button>
-      </div></div>`;
-  }
+  /* 规则全部命中时「未匹配」是空的，别让用户对着一张空表以为没解析：自动切到「全部」 */
+  if((S.mFilter||"un")==="un" && nUn===0 && ALLN>0) S.mFilter="all";
+  const mfil=S.mFilter||"un";
   return `<div class="card">
-    <h3>人工审核 · 全部流水
-      <span>规则命中的和没命中的都在这里，都能改；改完写回数仓，看板再从数仓重算</span></h3>
+    <h3>人工审核 · 本批流水
+      <span>只看本次导入的这批；历史流水请在导入页用「修改已存档流水」</span></h3>
     <div class="note" style="margin-top:8px">
-      ${isBatch?`本批 <b>${ALLR.length}</b> 笔（共 ${ALLN} 笔存档）：规则命中 <b>${nOk}</b>，未匹配 <b>${nUn}</b>。`:
-                `全部存档 <b>${ALLR.length}</b> 笔：规则命中 <b>${nOk}</b>，未匹配 <b>${nUn}</b>（历史流水建议用「修改已存档流水」改）。`}
+      本批 <b>${ALLN}</b> 笔${ALLTOT!==ALLN?`（全部存档 ${ALLTOT} 笔）`:""}：已匹配 <b>${nOk}</b>，未匹配 <b>${nUn}</b>。
+      ${nUn===0?"规则已全部命中，下面直接列出本批流水，只有科目不合适时才需要改。":""}
       每次改动都会立刻写数仓，不用等提交。</div>
     <div class="filters" style="margin-top:10px;flex-wrap:wrap;gap:8px">
       <span class="chips" style="gap:6px">
-        <button class="chip ${isBatch?"on":""}" data-scopebatch="1" ${isBatch?"":""}>本批 ${mBatchRows().length}</button>
-        <button class="chip ${isBatch?"":"on"}" data-scopeall="1">全部存档 ${ALLN}</button>
-        <button class="chip ${(S.mFilter||"all")==="all"?"on":""}" data-mf="all">不限匹配 ${ALLR.length}</button>
-        <button class="chip ${S.mFilter==="un"?"on":""}" data-mf="un">未匹配 ${nUn}</button>
-        <button class="chip ${S.mFilter==="ok"?"on":""}" data-mf="ok">已匹配 ${nOk}</button>
+        <button class="chip ${mfil==="un"?"on":""}" data-mf="un">未匹配 ${nUn}</button>
+        <button class="chip ${mfil==="ok"?"on":""}" data-mf="ok">已匹配 ${nOk}</button>
+        <button class="chip ${mfil==="all"?"on":""}" data-mf="all">全部 ${ALLN}</button>
       </span>
       <input id="mKw" value="${esc(S.mKw||"")}" placeholder="搜对方户名 / 摘要"
         style="width:180px;border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:12px;font-family:inherit">
       <div class="bar-line" style="flex:1;min-width:120px;margin:0 8px"><i id="mBar" style="width:0%;background:#2E8B57"></i></div>
-      <b id="mProg" style="font-size:13px;color:#1F3864">0 / ${ALLR.length}</b>
+      <b id="mProg" style="font-size:13px;color:#1F3864">0 / ${ALLN}</b>
       <span id="mSavedStat" style="font-size:11.5px;color:#6B7280">改动即写数仓</span>
-      <button class="btn ghost" id="mExp">导出结果</button>
       <button class="btn ghost" id="mAll">未匹配一键归「其他」</button>
-      <button class="btn ghost" id="mReload">从数仓重新取数</button>
-      <button class="btn ghost" id="mHistAll">修改历史</button>
-      ${isBatch?`<button class="btn" data-batchdone="1">✓ 完成本批并归档</button>`:""}
-      <span id="mModeBar"></span>
     </div>
     <div style="max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:6px">
       <table id="mTable" style="margin:0"></table></div>
     <div class="note" style="margin-top:12px">下拉里没有合适的选 <b>＋ 新增…</b> 输入回车即加入下拉；确实无法归类选 <b>其他</b>。
-      状态列：<b>规则</b>＝规则给的标签，<b>人工</b>＝你改过的（以人工为准），<b>待定</b>＝三项没齐、还不算打标。
-      <b>日期 / 金额 / 对方户名 / 摘要</b> 带虚线下划线，点一下就能就地改，<b>回车即存数仓</b>（Esc 放弃），每改一个字段留一条记录。</div>
+      状态列：<b>规则</b>＝规则给的标签，<b>人工</b>＝你改过的（以人工为准），<b>待定</b>＝三项没齐、还不算打标。</div>
     <div id="mHistBox"></div>
     <div id="mFooter" style="margin-top:12px"></div>
   </div>`;
@@ -2035,10 +2105,7 @@ function renderManual(){
   if(!S.mPend) S.mPend={};
   if(!S.mPendRaw) S.mPendRaw={};
   const rs=mFiltered();
-  const mode=!!S.mMode;
-  const allOn=rs.length>0 && rs.every(function(r){ return !!S.mSel[r.i]; });
   tb.innerHTML=`<thead><tr>
-    ${mode?`<th style="width:32px"><input type="checkbox" id="mChkAll" ${allOn?"checked":""} title="全选本页"></th>`:""}
     <th style="width:88px">日期</th><th style="width:46px">方向</th>
     <th style="width:92px">金额</th><th style="text-align:left;min-width:150px">对方户名</th>
     <th style="text-align:left;min-width:150px">摘要</th>
@@ -2051,45 +2118,32 @@ function renderManual(){
       const L1=D1.indexOf(st.l1)>=0?D1:D1.concat([st.l1].filter(Boolean));
       const L2=D2.indexOf(st.l2)>=0?D2:D2.concat([st.l2].filter(Boolean));
       const LCF=DCF.indexOf(st.cf)>=0?DCF:DCF.concat([st.cf].filter(Boolean));
-      const on=!!(S.mSel||{})[r.i];
-      const dis=(S.mSaving || (mode && !on)) ? "disabled" : "";
+      const dis=S.mSaving?"disabled":"";
       const pk=manualKey(r.d,r.amt,r.cp);
       const rawDraft=(S.mPendRaw||{})[r.rid]||{};
       const pendLbl=!!((S.mPend||{})[pk])||Object.keys(rawDraft).length>0;
-      const edit=(field,value)=>{
-        const v=Object.prototype.hasOwnProperty.call(rawDraft,field)?rawDraft[field]:value;
-        return `<span data-i="${r.i}" data-f="${esc(field)}" style="cursor:pointer;border-bottom:1px dashed #9CA3AF" title="点击修改${esc(field)}">${esc(v)||"—"}</span>`;
-      };
-      return `<tr class="${st.ok?"":"need"}" style="${on?"background:#F2F7FF":""}">
-        ${mode?`<td><input type="checkbox" data-pick="${r.i}" ${on?"checked":""}></td>`:""}
-        <td>${edit("交易日期",r.d)}</td>
-        <td>${edit("收支方向",r.dir)}</td>
-        <td class="${r.dir==='收'?'red':'green'}">${edit("金额",r.amt)}</td>
-        <td style="text-align:left;max-width:180px;overflow:hidden;text-overflow:ellipsis">${edit("对方户名",r.cp)}</td>
-        <td style="text-align:left;color:#9CA3AF;font-size:11px;max-width:190px;overflow:hidden;text-overflow:ellipsis">${edit("摘要",r.memo)}</td>
+      return `<tr class="${st.ok?"":"need"}">
+        <td>${esc(r.d)||"—"}</td>
+        <td>${esc(r.dir)||"—"}</td>
+        <td class="${r.dir==='收'?'red':'green'}">${esc(r.amt)}</td>
+        <td style="text-align:left;max-width:180px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.cp)}">${esc(r.cp)||"—"}</td>
+        <td style="text-align:left;color:#9CA3AF;font-size:11px;max-width:190px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.memo)}">${esc(r.memo)||"—"}</td>
         <td style="text-align:left"><select class="msel" data-m="${r.i}.l1" ${dis}>${mOpts(L1,st.l1)}</select></td>
         <td style="text-align:left"><select class="msel" data-m="${r.i}.l2" ${dis}>${mOpts(L2,st.l2)}</select></td>
         <td style="text-align:left"><select class="msel" data-m="${r.i}.cf" ${dis}>${mOpts(LCF,st.cf)}</select></td>
         <td>${pendLbl?'<span class="tag t-warn">待存</span>':(st.ok?(st.man?'<span class="tag t-ok">人工</span>':'<span class="tag t-gray">规则</span>'):'<span class="tag t-warn">待定</span>')}</td>
         <td>${r.rid?`<button class="btn ghost" data-hist="${r.i}" style="padding:2px 8px;font-size:11px">记录</button>`:'<span style="color:#C7D2E4">—</span>'}</td>
-      </tr>`;}).join("")}</tbody>`;
+      </tr>`;}).join("")||`<tr><td colspan="10" style="text-align:center;color:#9CA3AF;padding:20px;font-size:12px">${
+        (S.mFilter||"un")==="un"
+          ? "本批流水都已按规则命中，没有待人工确认的；切到「全部」可以逐笔查看或修改"
+          : "当前筛选下没有流水"}</td></tr>`}</tbody>`;
   const stEl=document.getElementById("mSavedStat");
   if(stEl){
     stEl.textContent=__mPending?"正在写入数仓…":Object.keys(__mChanges).length?"修改已保留，等待写入数仓":S.manualSaved?"✓ 已保存到数仓 · "+S.manualSaved.at:"已从数仓加载确认结果";
   }
+  /* 修改模式已取消：所有改动都是即时的，不再有「发起修改 / 勾选保存」这一层 */
   const bar=document.getElementById("mModeBar");
-  if(bar){
-    const nSel=Object.keys(S.mSel||{}).length;
-    bar.innerHTML = S.mMode
-      ? `<span class="chips" style="gap:6px;align-items:center">
-           <b style="font-size:12px;color:#1F3864">已选 ${nSel} 笔</b>
-           <button class="chip" id="mSelAll">全选本页</button>
-           <button class="chip" id="mSelNone">清空选择</button>
-           <button class="btn" id="mSaveSel" ${nSel?"":"disabled style=\"opacity:.45\""}>保存选中到数仓</button>
-           <button class="btn ghost" id="mQuit">退出修改</button>
-         </span>`
-      : `<button class="btn" id="mModeBtn">✎ 发起修改（勾几笔改几笔）</button>`;
-  }
+  if(bar) bar.innerHTML="";
   const hb=document.getElementById("mHistBox");
   if(hb){
     const h=S.mHist;
@@ -2104,11 +2158,71 @@ function renderManual(){
             <td style="text-align:left;color:#9CA3AF">${esc(x.old_val||"—")}</td>
             <td style="text-align:left">${esc(x.new_val||"—")}</td>
             <td>${esc(x.actor||"")}</td><td style="text-align:left;color:#9CA3AF;font-size:11px">${esc(x.reason||"")}</td></tr>`;}).join("")}</tbody></table>`
-          :'<div class="note">这一笔还没有改过，导进来什么样就是什么样。</div>'}
+          :`<div class="note">${h.rid?"这一笔还没有人工改过，导进来什么样就是什么样。":"还没有人工编辑记录（系统自动补齐的内容不在这里显示）。"}</div>`}
       </div>`;
     }
   }
   updateProg();
+}
+
+/* 归档：把本批（或最近一条）导入记录标记为「已确认」，只在申请记录上留痕，不动流水数据 */
+async function archiveBatch(){
+  const base=(typeof API!=="undefined"?API:"");
+  try{
+    const d=await fetch(base+"/api/requests",{cache:"no-store"}).then(function(r){ return r.json(); });
+    const rows=(d&&d.rows)||[];
+    const flows=rows.filter(function(x){ return x.kind==="flow"; })
+                    .sort(function(a,b){ return (+b.id||0)-(+a.id||0); });
+    const hit=rows.filter(function(x){ return x.kind==="flow" && x.batch && x.batch===S.batchId; })[0]
+           || flows[0];
+    if(!hit) return true;
+    const r=await fetch(base+"/api/requests",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"status",id:hit.id,status:"已确认",
+        actor:(localStorage.getItem("eco.actor")||"本地用户")})}).then(function(x){ return x.json(); });
+    return !!(r&&r.ok);
+  }catch(e){ return false; }
+}
+/* 归档完成：只清掉"待提交的本次导入状态"，流水数据仍然留在数仓，界面随即按数仓重新取回。
+   归档 = 申请记录标记「已确认」，绝不删除 ods_flow 里的任何一笔。 */
+function resetFlowIntake(){
+  try{
+    const nFlow=((S.raw.flow&&S.raw.flow.rows)||[]).length;
+    const nFiled=(S.raw.fileLog||[]).length;
+    /* 不再把 S.raw.flow / fileLog 置空：归档后仍要能看到这批已入库的文件与笔数 */
+    S.doneMsg=null; S.doneErr=false;
+    S.mHist=null;
+    S.mPend={}; S.mPendRaw={}; S.mSel={}; S.mScope="all";
+    S.batchDone=true;
+    S.step=1;
+    S.resetMsg=nFiled
+      ? `本批流水已归档：${nFiled} 个文件已在数仓（当前共 ${nFlow} 笔，未删除），可以继续导入下一批`
+      : "本批流水已归档：数据已在数仓（未删除），可以继续导入下一批";
+    try{ saveLS("manualDraft",{pending:{},raw:{},mode:false}); }catch(e0){}
+    renderSteps();
+    renderStepBody();
+    /* 从数仓重新取一次：确认归档后流水仍在，界面显示「数仓现有 N 笔」 */
+    const again=function(){ try{ renderStepBody(); }catch(e){} };
+    try{
+      if(window.WH_REFRESH) window.WH_REFRESH().then(again).catch(again);
+    }catch(e1){}
+    setTimeout(function(){ S.resetMsg=null; try{ renderStepBody(); }catch(e){} }, 9000);
+  }catch(e){}
+}
+
+/* 底部主按钮：先确保改动全部落库，再归档，最后进入管理看板 */
+function nextBoard(){
+  const btn=document.getElementById("mNextBoard");
+  if(btn) btn.disabled=true;
+  return commitManual().then(function(d){
+    if(!d || d.ok===false){ alert("保存失败：确认数仓服务 http://127.0.0.1:8765 在运行"); return; }
+    return archiveBatch().then(function(){
+      try{ if(window.renderReqBoxes) renderReqBoxes(); }catch(e){}
+      resetFlowIntake();
+      flash("✓ 已归档：本批流水仍在数仓（未删除），已进入管理看板");
+      showTab("p1");
+      try{ window.scrollTo({top:0,behavior:"smooth"}); }catch(e){}
+    });
+  }).finally(function(){ if(btn) btn.disabled=false; });
 }
 
 function updateProg(){
@@ -2118,19 +2232,15 @@ function updateProg(){
   const p=document.getElementById("mProg"), b=document.getElementById("mBar"), f=document.getElementById("mFooter");
   if(p) p.textContent=`已确认 ${done} / ${tot}`;
   if(b) b.style.width=(tot?done/tot*100:0).toFixed(1)+"%";
-  if(f && S.mMode){
-    const nSel=Object.keys(S.mSel||{}).length;
-    f.innerHTML=`<span style="font-size:12px;color:#1F3864">修改模式：勾选要改的流水 → 改科目或点格改字段（暂存）→ 点上方
-      <b>「保存选中到数仓」</b> 才会写回；<b>「退出修改」</b> 保留草稿，可再次进入继续。</span>
-      <span style="margin-left:8px;font-size:12px;color:${nSel?'#2E8B57':'#C0392B'}">已选 ${nSel} 笔</span>`;
-    return;
-  }
   if(f){
     const left=tot-done;
-    f.innerHTML=`<button class="btn" data-go="4" data-commit="1">保存到数仓并更新看板 →</button>
-      <button class="btn ghost" id="mSave" style="margin-left:8px">只保存不跳转</button>
-      <span id="mSaveTip" style="margin-left:10px;font-size:12px;color:${left?'#C0392B':'#2E8B57'}">
-        ${left?`还有 ${left} 笔没定科目，补完再保存更准`:`✓ 全部 ${tot} 笔都有科目，保存后看板按数仓重算`}　（人工改过 ${nMan} 笔）</span>`;
+    f.innerHTML=`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn" id="mSave">保存</button>
+      <button class="btn" id="mNextBoard">下一步：进入管理看板 →</button>
+      <span id="mSaveTip" style="font-size:12px;color:${left?'#C0392B':'#2E8B57'}">
+        ${left?`还有 ${left} 笔没定科目，补完再保存更准`:`✓ 全部 ${tot} 笔都有科目`}　（人工改过 ${nMan} 笔）·
+        下拉一改就即时写数仓并覆盖原记录，「保存」只是兜底提交</span>
+    </div>`;
   }
 }
 
@@ -2236,100 +2346,141 @@ function step5(){
 
 /* ================= 渲染：管理视角 ================= */
 function renderP1(){
-  const a=agg(), pts=cashPath(a);
-  const fc=pts.filter(p=>p.kind==="fc");
-  const endBal=fc[fc.length-1].bal;
-  const minP=fc.reduce((m,p)=>p.bal<m.bal?p:m,fc[0]);
-  const curBal=(DATA.balLatest&&DATA.balLatest.bal!=null)?DATA.balLatest.bal:(DATA.balHist[2]!=null?DATA.balHist[2]:NaN);
-  const curHint=(DATA.balLatest
-      ? (DATA.balLatest.month.replace(".","-")+" 月末 · "+(DATA.balLatest.accts||[]).join("+")
-         +((DATA.balLatest.lag||[]).length ? "（"+(DATA.balLatest.lag.join("、"))+"）" : ""))
-      : "本批流水没有「余额」列，取不到当前余额");
+  /* 全部口径改为「数仓实际流水」：不再用 Q4 计划模型推算，避免没有计划时全是 0 或错数 */
+  const rows=DATA.actAll||[];
+  const am=ACTM[ACTM.length-1]||"";
+  const amLab=ACTL[am]||am||"—";
+  const amKey=String(am).replace(".","-");
+  const novRows=rows.filter(function(x){ return String(x[1]||"").slice(0,7)===amKey; });
+  const inAm=(DATA.actIn&&DATA.actIn[am])||0;
+  const outAm=(DATA.actOut&&DATA.actOut[am])||0;
+  const netAm=(DATA.actNet&&DATA.actNet[am]!=null)?DATA.actNet[am]:(inAm-outAm);
+  const curBal=(DATA.balLatest&&DATA.balLatest.bal!=null)?DATA.balLatest.bal:NaN;
+  const balHint=DATA.balLatest
+    ? (String(DATA.balLatest.month).replace(".","-")+" 月末 · "+((DATA.balLatest.accts||[]).join("+")||"流水余额")
+       +((DATA.balLatest.lag||[]).length?"（"+(DATA.balLatest.lag.join("、"))+"）":""))
+    : "流水里没有「余额」列，取不到当前余额";
+  const uncls=novRows.filter(function(x){ return !x[6]; }).length;
+
   const k=[
-    {cls:"a",lab:"当前可用资金余额",val:curBal,hint:curHint},
-    {cls:"b",lab:"本月（"+(ACTL[ACTM[ACTM.length-1]]||MLAB[MONTHS[0]]||"")+"）净现金流",
-     val:(function(){var am=ACTM[ACTM.length-1];
-       if(am&&DATA.actNet&&DATA.actNet[am]!=null) return DATA.actNet[am];
-       return (a.inflow[MONTHS[0]]||0)-(a.outflow[MONTHS[0]]||0);})(),
-     hint:(function(){var am=ACTM[ACTM.length-1];
-       if(am&&DATA.actIn&&DATA.actIn[am]!=null)
-         return `实际流水：流入 ${wan(DATA.actIn[am]||0)} 万 / 流出 ${wan((DATA.actOut||{})[am]||0)} 万`;
-       return `计划：流入 ${wan(a.inflow[MONTHS[0]]||0)} 万 / 流出 ${wan(a.outflow[MONTHS[0]]||0)} 万`;})()},
-    {cls:"c",lab:"下月（"+(MLAB[MONTHS[0]]||MONTHS[0])+"）预计净流",
-     val:(a.inflow[MONTHS[0]]||0)-(a.outflow[MONTHS[0]]||0),
-     hint:"计划口径"+(DATA.plan&&DATA.plan.length?"":"（暂无计划）")},
-    {cls:"d",lab:"期末余额 / 安全线",val:endBal,hint:`安全线 ${wan(S.safe)} 万 · ${endBal<S.safe?"低于":"高于"}`}
+    {cls:"a",lab:"当前可用资金余额",val:curBal,tone:"bal",hint:balHint},
+    {cls:"b",lab:`${amLab}流入`,val:inAm,tone:"in",
+     hint:`${amLab}实际进账 ${novRows.filter(function(x){return x[2]==="收";}).length} 笔 · 数仓实算`},
+    {cls:"c",lab:`${amLab}流出`,val:outAm,tone:"out",
+     hint:`${amLab}实际出账 ${novRows.filter(function(x){return x[2]==="支";}).length} 笔 · 数仓实算`},
+    {cls:"d",lab:`${amLab}净现金流`,val:netAm,tone:"net",
+     hint:`流入 − 流出 · 共 ${novRows.length} 笔${uncls?`（${uncls} 笔未分类）`:""}`}
   ];
-  document.getElementById("kpis1").innerHTML=k.map(x=>`
-    <div class="kpi ${x.cls}"><div class="lab">${x.lab}</div>
-      <div class="val ${x.val>=0?'red':'green'}">${fmt(x.val)}</div>
-      <div class="hint">${x.hint}</div></div>`).join("");
+  document.getElementById("kpis1").innerHTML=k.map(function(x){
+    const cls = x.tone==="in" ? "red" : (x.tone==="out" ? "green" : (x.val>=0?"red":"green"));
+    const txt = !isFinite(x.val) ? "—" : ((x.tone==="out"?"−":"")+fmt(Math.abs(x.val)));
+    return `<div class="kpi ${x.cls}"><div class="lab">${x.lab}</div>
+      <div class="val ${cls}">${txt}</div>
+      <div class="hint">${x.hint}</div></div>`;
+  }).join("");
 
   const bn=document.getElementById("banner1");
-  if(endBal<0){
+  const safeOn=(S.safe||0)>0;
+  if(!isFinite(curBal)){
+    bn.className="banner";
+    bn.innerHTML=`<div><b>余额待补</b>：这批流水没有「余额」列，当前可用资金与安全线无法计算。请在导出流水时勾选余额列。</div>`;
+  }else if(!safeOn){
+    bn.className="banner";
+    bn.innerHTML=`<div><b>${amLab}资金概览</b>：月末余额 <b>${fmt(curBal)} 元</b>，当月净流 ${fmt(netAm)} 元。
+      还没有设置资金安全线，可在「配置 · 业务参数中心」里配置后这里会自动做安全线判断。</div>`;
+  }else if(curBal<S.safe && netAm<0){
     bn.className="banner bad";
-    bn.innerHTML=`<div><b>资金缺口</b>：按当前计划，<b>${minP.lab}</b>末余额跌至 <b>${fmt(minP.bal)} 元</b>，首次穿仓；
-      12月末 ${fmt(endBal)} 元。补至安全线需 <b>${fmt(-minP.bal+S.safe)} 元</b>。</div>`;
-  }else if(!isFinite(endBal)||!isFinite(curBal)){
+    bn.innerHTML=`<div><b>资金预警</b>：${amLab}末余额 <b>${fmt(curBal)} 元</b>，已低于安全线 ${fmt(S.safe)} 元；
+      当月净流出 ${fmt(Math.abs(netAm))} 元，缺口 <b>${fmt(S.safe-curBal)} 元</b>。</div>`;
+  }else if(curBal<S.safe){
     bn.className="banner";
-    bn.innerHTML=`<div><b>余额待补</b>：本批流水没有「余额」列，可用资金与安全线暂无法计算（显示 NaN）。请在导出流水时勾选余额列，或补充期初余额。</div>`;
-  }else if(endBal<S.safe){
-    bn.className="banner";
-    bn.innerHTML=`<div><b>安全线预警</b>：期末余额 ${fmt(endBal)} 元，低于安全线 ${fmt(S.safe)} 元，缺口 ${fmt(S.safe-endBal)} 元。</div>`;
+    bn.innerHTML=`<div><b>安全线预警</b>：${amLab}末余额 ${fmt(curBal)} 元，低于安全线 ${fmt(S.safe)} 元，缺口 ${fmt(S.safe-curBal)} 元；
+      当月净流 ${fmt(netAm)} 元。</div>`;
   }else{
     bn.className="banner ok";
-    bn.innerHTML=`<div><b>资金安全</b>：期末余额 ${fmt(endBal)} 元，高于安全线。</div>`;
+    bn.innerHTML=`<div><b>资金安全</b>：${amLab}末余额 ${fmt(curBal)} 元，高于安全线 ${fmt(S.safe)} 元；
+      当月净流 ${fmt(netAm)} 元。</div>`;
   }
 
-  document.getElementById("waterchart").innerHTML=waterChart(pts,S.safe);
-  const wfIsAct=S.wfMonth<3;
-  document.getElementById("wflab").textContent=wfIsAct
-    ? ACTL[ACTM[S.wfMonth]]+" · 实际口径"
-    : MLAB[MONTHS[S.wfMonth-3]]+" · 计划口径";
+  /* 月度余额走势：只用实际月末余额，没有的点留空 */
+  const pts=ACTM.map(function(m,i){ return {lab:ACTL[m]||m, bal:DATA.balHist[i], kind:"act"}; })
+                .filter(function(p){ return p.bal!=null; });
+  /* 卡片副标题跟着实际月份走，别再写死「实际 3 期 + 预测 3 期」 */
+  try{
+    const _wc=document.getElementById("waterchart");
+    const _h=_wc&&_wc.closest(".card")&&_wc.closest(".card").querySelector("h3");
+    if(_h) _h.innerHTML=`资金水位趋势 <span>${ACTM.map(function(m){ return ACTL[m]||m; }).join(" / ")} · 实际月末余额</span>`;
+  }catch(e0){}
+  document.getElementById("waterchart").innerHTML = pts.length
+    ? waterChart(pts, S.safe)
+    : '<div class="note">流水里没有「余额」列，画不出余额走势；导入时保留余额列即可。</div>';
+
+  /* 瀑布：月份只列有实际数据的月份，首次进入默认落在最新月 */
+  if(S.__wfInit!==1){ S.wfMonth=ACTM.length?ACTM.length-1:0; S.__wfInit=1; }
+  if(S.wfMonth>=ACTM.length) S.wfMonth=ACTM.length-1;
+  if(S.wfMonth<0) S.wfMonth=0;
+  const wfM=ACTM[S.wfMonth]||am;
+  document.getElementById("wflab").textContent=(ACTL[wfM]||wfM)+" · 实际口径";
   document.getElementById("wfmonth").innerHTML=
-    ACTM.map((m,i)=>`<button class="chip ${i===S.wfMonth?"on":""}" data-wf="${i}">${ACTL[m]}</button>`).join("")
-    +'<i style="color:#C8D2E4;font-style:normal;margin:0 2px">|</i>'
-    +MONTHS.map((m,i)=>`<button class="chip ${i+3===S.wfMonth?"on":""}" data-wf="${i+3}">${MLAB[m]}</button>`).join("");
-  document.getElementById("waterfall").innerHTML=wfIsAct
-    ? waterfallAct(ACTM[S.wfMonth])
-    : waterfall(a,S.wfMonth-3);
+    ACTM.map((m,i)=>`<button class="chip ${i===S.wfMonth?"on":""}" data-wf="${i}">${ACTL[m]||m}</button>`).join("");
+  document.getElementById("waterfall").innerHTML=waterfallAct(wfM);
 
-  // 三大活动
-  const acts=[
-    {k:"经营活动",act:DATA.actInTotal-DATA.actOutTotal,plan:a.net,note:"主营回款 − 采购/费用/税费"},
-    {k:"投资活动",act:DATA.invest,plan:0,note:"投资活动单独列示"},
-    {k:"内部划转",act:DATA.internalNet,plan:0,note:"内部账户划转单独列示"},
-    {k:"未分类/其他",act:DATA.unclassifiedNet,plan:0,note:"未分类往来需要人工确认"}
-  ];
+  /* 收支结构（按分类）：流入 / 流出 / 净额 / 笔数 */
+  let sIn=0,sOut=0,sN=0;
+  const struct=CATS.map(function(c){
+    const ci=catIn(c,wfM), co=catOut(c,wfM);
+    const n=rows.filter(function(x){ return String(x[1]||"").slice(0,7)===String(wfM).replace(".","-") && x[8]===c; }).length;
+    sIn+=ci; sOut+=co; sN+=n;
+    return {c:c,in:ci,out:co,net:ci-co,n:n};
+  }).filter(function(x){ return x.in||x.out; });
+  const nonOp=(DATA.actNet&&DATA.actNet[wfM]!=null?DATA.actNet[wfM]:0)-(sIn-sOut);
   document.getElementById("act3").innerHTML=`
-    <table><thead><tr><th>活动</th><th>Q3 实际净额</th><th>Q4 计划净额</th><th style="text-align:left">说明</th></tr></thead>
-    <tbody>${acts.map(x=>`<tr><td>${x.k}</td>
-      <td class="${x.act>=0?'red':'green'}">${fmt(x.act)}</td>
-      <td class="${x.plan>=0?'red':'green'}">${x.k!=="经营活动"?'<span class="tag t-bad">计划未分类</span>':fmt(x.plan)}</td>
-      <td style="text-align:left;color:#9CA3AF;font-size:11px">${x.note}</td>
-    </tr>`).join("")}</tbody></table>
-    <div class="note">四行合计 ${fmt(acts.reduce((s,x)=>s+x.act,0))} 元 ＝ Q3 三个账户余额变动合计。计划侧 100% 落在经营活动，缺「活动分类」字段。</div>`;
+    <table><thead><tr><th style="text-align:left">收支分类</th><th>流入</th><th>流出</th><th>净额</th><th>笔数</th></tr></thead>
+    <tbody>${struct.map(function(x){ return `<tr>
+      <td style="text-align:left">${x.c}</td>
+      <td class="red">${fmt(x.in)}</td>
+      <td class="green">${fmt(x.out)}</td>
+      <td class="${x.net>=0?'red':'green'}">${fmt(x.net)}</td>
+      <td>${x.n}</td></tr>`; }).join("")}
+      ${Math.abs(nonOp)>=0.01?`<tr><td style="text-align:left">投资 / 内部划转 / 未分类</td>
+        <td class="red">—</td><td class="green">—</td>
+        <td class="${nonOp>=0?'red':'green'}">${fmt(nonOp)}</td><td>—</td></tr>`:""}
+    </tbody>
+    <tfoot><tr><td>合计</td><td class="red">${fmt(sIn)}</td><td class="green">${fmt(sOut)}</td>
+      <td class="${sIn-sOut>=0?'red':'green'}">${fmt(sIn-sOut)}</td><td>${sN}</td></tr></tfoot></table>
+    <div class="note">${ACTL[wfM]||wfM} 的实际收支结构，分类来自打标结果；「投资 / 内部划转 / 未分类」是净额兜底项，用于和余额勾稽。</div>`;
 
-  // 缺口判断
-  const m10=a.inflow["2026-10"]-a.outflow["2026-10"];
-  const b10=S.cash+m10, b11=b10+(a.inflow["2026-11"]-a.outflow["2026-11"]);
-  const rows=[
-    ["10月末余额",b10,b10<S.safe?"低于安全线": "安全"],
-    ["11月末余额",b11,b11<0?"已穿仓":(b11<S.safe?"低于安全线":"安全")],
-    ["12月末余额",endBal,endBal<0?"已穿仓":(endBal<S.safe?"低于安全线":"安全")],
-    ["需补足金额",Math.max(0,S.safe-Math.min(b10,b11,endBal)),"按最低月末余额补到安全线"],
-  ];
+  /* 月度资金滚动表 */
+  const gapRows=ACTM.map(function(m,i){
+    const inM=(DATA.actIn&&DATA.actIn[m])||0, outM=(DATA.actOut&&DATA.actOut[m])||0;
+    const bal=DATA.balHist[i];
+    const judge=(bal==null)?"无余额数据":(bal<0?"已穿仓":(bal<S.safe?"低于安全线":"安全"));
+    return {m:m,in:inM,out:outM,net:inM-outM,bal:bal,judge:judge};
+  });
   document.getElementById("gapbox").innerHTML=`
-    <table><thead><tr><th>节点</th><th>余额（元）</th><th style="text-align:left">判定</th></tr></thead>
-    <tbody>${rows.map(r=>`<tr><td>${r[0]}</td>
-      <td class="${r[1]>=0?'red':'green'}">${fmt(r[1])}</td>
-      <td style="text-align:left"><span class="tag ${String(r[2]).includes("穿仓")||String(r[2]).includes("低于")?'t-bad':'t-ok'}">${r[2]}</span></td>
-    </tr>`).join("")}</tbody></table>
-    <div class="note">按滚动口径计算：每月末余额 = 上月末余额 + 当月净流。未含期初应收/应付与理财赎回。</div>`;
+    <table><thead><tr><th>月份</th><th>流入</th><th>流出</th><th>净额</th><th>月末余额</th><th style="text-align:left">判定</th></tr></thead>
+    <tbody>${gapRows.map(function(x){ return `<tr>
+      <td>${ACTL[x.m]||x.m}</td>
+      <td class="red">${fmt(x.in)}</td>
+      <td class="green">${fmt(x.out)}</td>
+      <td class="${x.net>=0?'red':'green'}">${fmt(x.net)}</td>
+      <td class="${x.bal>=0?'':'green'}">${x.bal==null?"—":fmt(x.bal)}</td>
+      <td style="text-align:left"><span class="tag ${String(x.judge).indexOf("安全")>=0&&String(x.judge).indexOf("低于")<0?'t-ok':(x.judge==="无余额数据"?'t-gray':'t-bad')}">${x.judge}</span></td>
+    </tr>`; }).join("")}</tbody></table>
+    <div class="note">按数仓实际流水逐月汇总；月末余额取自流水「余额」列（多账户按账户分别取当月最后一条再相加）。</div>`;
 }
 
 /* ================= 渲染：下钻 ================= */
 function renderP2(){
+  /* 默认分类在当前月份没有数据时，自动切到金额最大的分类，避免出现空图空表 */
+  const _sum=function(c){ return ACTM.reduce(function(s,m){ return s+catVal(c,m); },0); };
+  try{
+    if(!S.drillCat || _sum(S.drillCat)<=0){
+      const hit=CATS.filter(function(c){ return _sum(c)>0; })
+                    .sort(function(x,y){ return _sum(y)-_sum(x); })[0];
+      if(hit) S.drillCat=hit;
+    }
+  }catch(e){}
   document.getElementById("dimAct").innerHTML=["经营","投资","筹资"].map(c=>
     `<button class="chip ${c===S.drillAct?"on":""} ${c!=="经营"?"dis":""}" data-da="${c}">${c}活动${c!=="经营"?"（计划无）":""}</button>`).join("");
   document.getElementById("dimCat").innerHTML=CATS.map(c=>
@@ -2338,37 +2489,57 @@ function renderP2(){
   const a=agg(), cat=S.drillCat;
   const actD=ACTM.map(m=>catVal(cat,m));
   const planD=MONTHS.map(m=>a.R.filter(r=>r.month===m&&PLAN2CAT[r.subj]===cat).reduce((s,r)=>s+r.amt,0));
+  const labels=ACTM.map(m=>ACTL[m]||m).concat(MONTHS.map(m=>MLAB[m]||m));
   document.getElementById("drillTitle").innerHTML=`${cat} · 计划 vs 实际 <span>万元</span>`;
   document.getElementById("drillTrend").innerHTML=
-    groupBars(["7月","8月","9月","10月","11月","12月"],[
-      {name:"实际",color:"#9CA3AF",data:actD.concat([0,0,0])},
-      {name:"计划",color:"#1F3864",data:[0,0,0].concat(planD)}
-    ],{W:600,H:270});
+    labels.length
+      ? groupBars(labels,[
+          {name:"实际",color:"#9CA3AF",data:actD.concat(MONTHS.map(()=>0))},
+          {name:"计划",color:"#1F3864",data:ACTM.map(()=>0).concat(planD)}
+        ],{W:640,H:280})
+      : '<div class="note">还没有可分析的月份：先导入银行流水。</div>';
   const actSum=actD.reduce((s,v)=>s+v,0), planSum=planD.reduce((s,v)=>s+v,0);
+  const actAvg=ACTM.length?actSum/ACTM.length:0, planAvg=MONTHS.length?planSum/MONTHS.length:0;
+  const actRange=labels.slice(0,ACTM.length).join(" / ")||"—";
+  const planRange=labels.slice(ACTM.length).join(" / ")||"—";
   const lvl=DATA.actMap[cat]?DATA.actMap[cat].level:"—";
   document.getElementById("drillNote").innerHTML=
-    `Q3 实际合计 <b>${fmt(actSum)}</b> 元（月均 ${fmt(actSum/3)}），Q4 计划合计 <b>${fmt(planSum)}</b> 元（月均 ${fmt(planSum/3)}）。
+    `实际（${actRange}）合计 <b>${fmt(actSum)}</b> 元（月均 ${fmt(actAvg)}），计划（${planRange}）合计 <b>${fmt(planSum)}</b> 元（月均 ${fmt(planAvg)}）。
      映射等级：<span class="tag ${lvl==='可映射'?'t-ok':(lvl==='部分可映射'?'t-warn':'t-bad')}">${lvl}</span>
      ${DATA.actMap[cat]&&DATA.actMap[cat].note?"· "+DATA.actMap[cat].note:""}`;
 
-  // 穿透表
+  // 穿透表（可按月份、收支方向、金额阈值筛选）
+  const _pmSel=document.getElementById("penMonth");
+  if(_pmSel){
+    const _cur=_pmSel.value||S.penMonth||"all";
+    const _opts='<option value="all">全部月份</option>'+ACTM.map(function(m){ return `<option value="${m}">${ACTL[m]||m}</option>`; }).join("");
+    if(_pmSel.dataset.sig!==_opts){ _pmSel.innerHTML=_opts; _pmSel.dataset.sig=_opts; }
+    _pmSel.value=(_cur==="all"||ACTM.indexOf(_cur)>=0)?_cur:"all";
+    S.penMonth=_pmSel.value;
+  }
+  const _pdSel=document.getElementById("penDir");
+  if(_pdSel) _pdSel.value=S.penDir||"all";
+  const pm=S.penMonth||"all", pd=S.penDir||"all";
   const thr=S.thr*10000;
   let rows=[];
   if(S.penSrc==="act"){
-    rows=DATA.actBig.filter(r=>(cat==="全部"?true:r.cat===cat)&&r.amt>=thr).sort((x,y)=>y.amt-x.amt);
+    rows=DATA.actBig.filter(r=>(cat==="全部"?true:r.cat===cat)&&r.amt>=thr
+        &&(pm==="all"||r.m===pm)&&(pd==="all"||r.dir===pd)).sort((x,y)=>y.amt-x.amt);
     document.getElementById("penTable").innerHTML=`
       <thead><tr><th>日期</th><th>方向</th><th style="text-align:left">对方户名</th><th style="text-align:left">科目</th><th>金额</th></tr></thead>
       <tbody>${rows.map(r=>`<tr>
         <td>${r.d}</td><td><span class="tag ${r.dir==='收'?'t-in':'t-out'}">${r.dir}</span></td><td style="text-align:left;max-width:210px;overflow:hidden;text-overflow:ellipsis">${r.cp||"—"}</td>
         <td style="text-align:left;color:#6B7280">${r.k1}${r.k2?"/"+r.k2:""}</td>
-        <td class="${r.dir==="收"?"red":"green"}">${fmt(r.amt)}</td></tr>`).join("")}</tbody>
+        <td class="${r.dir==="收"?"red":"green"}">${fmt(r.amt)}</td></tr>`).join("")||'<tr><td colspan="5" style="color:#9CA3AF;padding:14px">当前分类 / 阈值下没有命中流水，换个分类或把阈值拉到 0</td></tr>'}</tbody>
       <tfoot>${(()=>{const ri=rows.filter(r=>r.dir==="收"),ro=rows.filter(r=>r.dir!=="收");
         const si=ri.reduce((s,r)=>s+r.amt,0),so=ro.reduce((s,r)=>s+r.amt,0);
         return `<tr><td colspan="4">收入 ${ri.length} 笔</td><td class="red">${fmt(si)}</td></tr>
         <tr><td colspan="4">支出 ${ro.length} 笔（同科目下的退款/冲回）</td><td class="green">${fmt(so)}</td></tr>
         <tr><td colspan="4">净额 ${rows.length} 笔</td><td>${fmt(si-so)}</td></tr>`;})()}</tfoot>`;
   }else{
-    rows=effRows().filter(r=>r.amt>=thr&&(cat==="全部"||PLAN2CAT[r.subj]===cat));
+    rows=effRows().filter(r=>r.amt>=thr&&(cat==="全部"||PLAN2CAT[r.subj]===cat)
+        &&(pm==="all"||r.month===pm.replace(".","-"))
+        &&(pd==="all"||(pd==="收"&&r.dir==="流入")||(pd==="支"&&r.dir==="流出")));
     document.getElementById("penTable").innerHTML=`
       <thead><tr><th>月份</th><th>科目</th><th>来源表</th><th>金额</th></tr></thead>
       <tbody>${rows.map(r=>`<tr><td>${r.month}</td>
@@ -2378,7 +2549,8 @@ function renderP2(){
       <tfoot><tr><td colspan="3">命中 ${rows.length} 行</td><td>${fmt(rows.reduce((s,r)=>s+r.amt,0))}</td></tr></tfoot>`;
   }
   document.getElementById("penCount").textContent=
-    `${S.penSrc==="act"?"实际流水":"计划底仓"} · ${(+S.thr>0)?"≥"+S.thr+"万":"全部金额"} · 命中 ${rows.length} 条`;
+    `${S.penSrc==="act"?"实际流水":"计划底仓"} · ${pm==="all"?"全部月份":(ACTL[pm]||pm)} · `+
+    `${pd==="all"?"收+支":(pd==="收"?"只看收入":"只看支出")} · ${(+S.thr>0)?"≥"+S.thr+"万":"全部金额"} · 命中 ${rows.length} 条`;
 }
 
 /* ================= 渲染：明细 ================= */
@@ -2763,8 +2935,8 @@ document.addEventListener("click",async e=>{
     S.step=+go.dataset.go; renderSteps(); renderStepBody();
     window.scrollTo({top:0,behavior:"smooth"}); return;
   }
-  const st=e.target.closest("[data-step]");
-  if(st){ S.resetArm=null; S.step=+st.dataset.step; renderSteps(); renderStepBody(); return; }
+  /* 步骤条不可点击：只能通过页面里的「下一步：人工审核」等按钮推进 */
+  if(e.target.closest("[data-step]")) return;
   const tb=e.target.closest("[data-tab]");
   if(tb){ showTab(tb.dataset.tab); return; }
   const wf=e.target.closest("[data-wf]");
@@ -2787,14 +2959,28 @@ document.addEventListener("change",e=>{
   else if(id==="dDir"){ S.dDir=e.target.value; renderP3(); }
   else if(id==="dMin"){ S.dMin=+e.target.value; renderP3(); }
 });
+let __archKwTimer=null;
 document.addEventListener("input",e=>{
   if(e.target.id==="dKw"){ S.dKw=e.target.value; renderP3(); }
   if(e.target.id==="mKw"){ S.mKw=e.target.value; renderManual(); }
+  /* 存档流水列表的搜索：渲染会重建 DOM，所以防抖 + 还原焦点与光标 */
+  if(e.target.id==="archKw"){
+    S.archKw=e.target.value;
+    const pos=(e.target.selectionStart!=null?e.target.selectionStart:e.target.value.length);
+    clearTimeout(__archKwTimer);
+    __archKwTimer=setTimeout(function(){
+      renderArch();
+      const el=document.getElementById("archKw");
+      if(el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e2){} }
+    }, 260);
+  }
 });
 document.getElementById("thr").addEventListener("input",e=>{
   S.thr=+e.target.value;document.getElementById("thrval").textContent=S.thr+" 万";renderP2();
 });
 document.getElementById("penSrc").addEventListener("change",e=>{S.penSrc=e.target.value;renderP2();});
+document.getElementById("penMonth").addEventListener("change",e=>{S.penMonth=e.target.value;renderP2();});
+document.getElementById("penDir").addEventListener("change",e=>{S.penDir=e.target.value;renderP2();});
 document.addEventListener("change",e=>{
   const ca=e.target.closest("#mChkAll");
   if(ca){ if(ca.checked){ mFiltered().forEach(function(r){ S.mSel[r.i]=true; }); } else { S.mSel={}; } renderManual(); return; }
@@ -2826,7 +3012,14 @@ document.addEventListener("change",e=>{
     S.manual[_key]=cur;
     saveManual();
     flushManual("change");                 /* 立刻落数仓，不等 1.2 秒节流 */
-    ms.closest("tr").classList.toggle("need",!mState(row).ok);
+    const stNow=mState(row);
+    ms.closest("tr").classList.toggle("need",!stNow.ok);
+    /* 状态列跟着实时变：规则 / 人工 / 待定 */
+    const tds=ms.closest("tr").children;
+    const stCell=tds[tds.length-2];
+    if(stCell) stCell.innerHTML = stNow.ok
+      ? (stNow.man?'<span class="tag t-ok">人工</span>':'<span class="tag t-gray">规则</span>')
+      : '<span class="tag t-warn">待定</span>';
     updateProg();
   }
 });
@@ -3010,6 +3203,24 @@ function headMap(headsRaw){
   return {map,all,hit,heads};
 }
 
+/* 日期/时间拆分：银行的「交易日期」经常带时分秒，入库只留 YYYY-MM-DD，时间放进「交易时间」 */
+function normDateTime(v){
+  const s=String(v==null?"":v).trim();
+  if(!s) return {d:"", t:""};
+  let m=/^(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})日?(?:[\sT]+(\d{1,2}:\d{2}(?::\d{2})?))?/.exec(s);
+  if(m){
+    const d=m[1]+"-"+String(+m[2]).padStart(2,"0")+"-"+String(+m[3]).padStart(2,"0");
+    const t=m[4]?m[4].replace(/^(\d):/,"0$1:"):"";
+    return {d:d, t:t};
+  }
+  m=/^(\d{4})(\d{2})(\d{2})(?:\s*(\d{2}:\d{2}(?::\d{2})?))?$/.exec(s);   /* 20261002 这种紧凑格式 */
+  if(m){
+    const d=m[1]+"-"+m[2]+"-"+m[3];
+    return {d:d, t:m[4]||""};
+  }
+  return {d:s, t:""};
+}
+
 /* 2D 矩阵 → 标准字段对象（自动找表头行） */
 function toObjects(matrix){
   let best=null;
@@ -3056,8 +3267,11 @@ function toObjects(matrix){
       else if(outN && !inN){ amtStr=g("amtOut"); dirStr=dirStr||"支"; }
       else if(inN||outN){ amtStr=String(inN||outN); dirStr=dirStr||(inN?"收":"支"); }
     }
+    const _rawDate=pickDate()||g("month");
+    const _dt=normDateTime(_rawDate);
     out.push({
-      "月份":g("month"), "交易日期":pickDate()||g("month"), "收支方向":dirStr,
+      "月份":g("month")||(_dt.d?_dt.d.slice(0,7):""),
+      "交易日期":_dt.d||_rawDate, "交易时间":_dt.t, "收支方向":dirStr,
       "金额":amtStr, "对方户名":j("cp"), "摘要":j("memo"),
       "收支科目(一级)":g("k1"), "明细科目(二级)":g("k2"), "现金流量分类":g("cf"),
       "公司主体":g("org"), "折人民币":g("amtCny"), "预算金额(原币)":g("amtOrig"),
@@ -3326,10 +3540,14 @@ function applyFlow(rows, mode){
   rows.forEach(r=>{
     const d=String(r["交易日期"]||r["日期"]||"").trim();
     const amtRaw=numOf(r["金额"]);
+    /* 月份统一成 YYYY.MM：不然 "2026-11" 与 "2026.07" 会被当成两个不同月份，按月的指标全取不到数 */
     let mo=String(r["月份"]||"").trim();
-    if(!mo || !/\d/.test(mo)){
+    const mmo=mo.match(/(\d{4})[-/.年](\d{1,2})/);
+    if(mmo){
+      mo=mmo[1]+"."+String(+mmo[2]).padStart(2,"0");
+    }else{
       const mm=d.match(/(\d{4})[-/.年](\d{1,2})/);
-      mo = mm ? (mm[1]+"."+String(+mm[2]).padStart(2,"0")) : "未标注月份";
+      mo = mm ? (mm[1]+"."+String(+mm[2]).padStart(2,"0")) : (mo||"未标注月份");
     }
     const amt=Math.abs(amtRaw);
     if(!amt){ skip.noAmt++; return; }
@@ -3557,23 +3775,28 @@ async function readMany(fileList, hintKind, opts){
   const pack = { flow:{rows:[], meta:null, items:[], dup:0},
                  plan:{rows:[], meta:null, items:[], dup:0} };
   let log = [];
-  // 追加模式：已有导入不丢，新文件并入（同一笔自动去重）
-  const oldF = S.raw.flow, oldP = S.raw.plan;
-  if(oldF && opts && opts.append !== false){
-    pack.flow.rows = [...oldF.rows]; pack.flow.meta = oldF.meta;
-    pack.flow.items = [...(oldF.items || [])];
-  }
-  if(oldP && opts && opts.append !== false){
-    pack.plan.rows = [...oldP.rows]; pack.plan.meta = oldP.meta;
-    pack.plan.items = [...(oldP.items || [])];
-    pack.plan.dup = oldP.dup || 0;
-  }
-  if(opts && opts.append !== false) log = [...(S.raw.fileLog || [])];
-  const prevFlowN = pack.flow.rows.length;
+  /* 每次上传只看这一批文件：不再把上一次的预览行/文件列表带进来（数据早已在数仓，刷新后会全量取回）。
+     同一批里选多个文件仍会正常合并去重。 */
+  S.doneMsg = null; S.doneErr = false;
   S.busy = {n: files.length, done: 0, name: ""};
   renderStepBody();
+  /* 同名文件重复上传：直接判失败并在「上传结果」里标出来 */
+  const knownFiles=new Set(((window.__WH_FILES)||[])
+    .map(function(n){ return String(n||"").trim(); }).filter(Boolean));
+  const thisBatchSeen=new Set();
   for(let i = 0; i < files.length; i++){
     const f = files[i];
+    const nm=String(f.name||"").trim();
+    if(knownFiles.has(nm) || thisBatchSeen.has(nm)){
+      log.push({name:f.name, ok:false, kind:"—",
+        reason: thisBatchSeen.has(nm)
+          ? "同名文件重复选择，本次只导入一次"
+          : "该文件已上传过（数仓里已有同名文件），本次跳过；如确需覆盖，请改名后再上传"});
+      S.busy = {n: files.length, done: i+1, name: f.name};
+      renderStepBody();
+      continue;
+    }
+    thisBatchSeen.add(nm);
     S.busy = {n: files.length, done: i, name: f.name};
     setBusyText(`正在解析 ${i+1}/${files.length}：${f.name}`);
     const r = await readOneFile(f);
@@ -3624,6 +3847,14 @@ async function readMany(fileList, hintKind, opts){
   S.raw.fileLog = log;
   S.raw.flowFail = log.filter(x=>!x.ok);
   if(!okFlow && !okPlan){
+    const bad=log.filter(function(x){ return x.ok===false; });
+    const reason = bad.length ? bad[0].reason : "没有读到可用的数据行";
+    /* 整批失败：不写申请记录、在上传结果里也不留失败行，页面保持空白，直接换文件重传 */
+    S.raw.fileLog = [];
+    S.raw.flowFail = [];
+    S.doneMsg = null;
+    S.doneErr = false;
+    flash("导入失败：" + reason, true);
     renderStepBody();
     return;
   }
@@ -3636,10 +3867,20 @@ async function readMany(fileList, hintKind, opts){
     S.mScope="batch"; S.batchDone=false;
   }
   if(okPlan) commitPlan(pack.plan.rows, pack.plan.meta, pack.plan.items, pack.plan.dup);
-  if(okFlow) importPending.flow={kind:'flow',fileName:(pack.flow.items[0]||{}).name||'上传文件',rows:pack.flow.rows};
-  if(okPlan) importPending.plan={kind:'plan',fileName:(pack.plan.items[0]||{}).name||'上传文件',rows:pack.plan.rows};
+  /* 文件名按「本次实际导入成功的文件」取名，多个文件时就记「N 个文件」，
+     与页面显示的批次名保持一致，避免出现「csv 的名字配 31 笔 xlsx 数据」 */
+  const _batchName=function(items){
+    const a=(items||[]).filter(function(x){ return x.ok; }).map(function(x){ return x.name; });
+    return a.length>1?(a.length+" 个文件"):(a[0]||"上传文件");
+  };
+  const thisLog=log.slice();                 /* 本次解析结果：刷新后仍只展示这一批的文件 */
+  if(okFlow) importPending.flow={kind:'flow',fileName:_batchName(pack.flow.items),rows:pack.flow.rows};
+  if(okPlan) importPending.plan={kind:'plan',fileName:_batchName(pack.plan.items),rows:pack.plan.rows};
   storeImportDrafts();
-  await flushImports();
+  /* 先确保落库成功再整体刷新（flushImports 内部已 await WH_REFRESH），
+     避免「导入完马上下钻分析还是空图」；回包里带后端判重结果用于区分重复导入 */
+  const flushRes=await flushImports();
+  const _dup=((flushRes&&flushRes.results)||[]).some(function(r){ return r && r.duplicated; });
   S.lastImport = {
     ok: true,
     files: files.length,
@@ -3648,6 +3889,21 @@ async function readMany(fileList, hintKind, opts){
     rows: okFlow, planRows: okPlan, dup: pack.flow.dup + pack.plan.dup,
     cross: (okPlan > 0 && hintKind === "flow") || (okFlow > 0 && hintKind === "plan")
   };
+  if(!flushRes || flushRes.ok===false){
+    /* 落库失败：workspaceStatus 已提示并露出「重试保存」，草稿保留，这里不报成功 */
+    S.doneMsg=null; S.doneErr=false;
+  }else if(_dup){
+    /* 重复导入：不留申请记录、不留预览痕迹，只提示一下，页面回到空白可继续上传 */
+    S.doneMsg=null; S.doneErr=false;
+    try{ S.lastImport=null; }catch(e0){}
+    S.raw.fileLog=[]; S.raw.flowFail=[];
+    flash("导入失败：该文件内容与数仓已有流水完全重复，没有新增任何记录", true);
+  }else if(okFlow){
+    /* 成功提示等后端判重结果回来再定（重复导入不能提示「已导入」） */
+    S.doneErr=false;
+    const nm=thisLog.length>1?`${thisLog.length} 个文件`:((thisLog[0]&&thisLog[0].name)||"上传文件");
+    S.doneMsg=`已导入：${nm}（${okFlow} 笔）`;
+  }
   saveWorkspace();
   renderStepBody();
 }
@@ -3760,6 +4016,7 @@ function resetImport(kind){
     S.raw.fileLog = (S.raw.fileLog || []).filter(x=> kind==="计划" ? x.kind!=="plan" : x.kind==="plan");
     S.raw.flowFail = (S.raw.fileLog || []).filter(x=>!x.ok);
     S.resetMsg = kind + "导入预览已重置；数仓存档与人工确认仍保留，可重新取数或上传";
+    S.doneMsg = null;
     renderSteps();
     renderStepBody();
     setTimeout(()=>{ S.resetMsg=null; }, 6000);
@@ -3808,6 +4065,7 @@ document.addEventListener("click",e=>{
     S.raw.flow = null; S.applied = false; S.applyInfo = null;
     S.step = 1; S.busy = null; S.resetArm = null;
     S.resetMsg = "流水：已开始新一批，请上传新月份流水（之前导入的批次仍保留在数仓）";
+    S.doneMsg = null;
     renderSteps(); renderStepBody();
     setTimeout(()=>{ S.resetMsg = null; if(typeof renderStepBody==="function") renderStepBody(); }, 8000);
     return;
@@ -3937,9 +4195,14 @@ document.addEventListener("click",e=>{
   const msave=e.target.closest("#mSave");
   if(msave){
     msave.disabled=true;
-    commitManual().then(function(d){if(d.ok) updateProg();}).finally(function(){msave.disabled=false;});
+    commitManual().then(function(d){
+      if(d&&d.ok){ toast2("✓ 已保存到数仓"); updateProg(); }
+      else { mStat("保存失败：确认数仓服务在运行","#C0392B"); }
+    }).finally(function(){msave.disabled=false;});
     return;
   }
+  const mnext=e.target.closest("#mNextBoard");
+  if(mnext){ nextBoard().catch(function(){ if(mnext) mnext.disabled=false; }); return; }
   if(e.target.closest("[data-scopeall]")){ S.mScope="all"; renderStepBody(); return; }
   if(e.target.closest("[data-scopebatch]")){ S.mScope="batch"; renderStepBody(); return; }
   const bd=e.target.closest("[data-batchdone]");
@@ -3968,8 +4231,12 @@ document.addEventListener("click",e=>{
         actor:(localStorage.getItem("eco.actor")||"本地用户")})})
       .then(function(r){ return r.json(); })
       .then(function(d){
-        if(d&&d.ok){ toast2("✓ 已确认完成：数据按「覆盖原记录」写入数仓，没有新增副本"); renderReqBoxes(); }
-        else alert("确认失败");
+        if(d&&d.ok){
+          flash("✓ 已确认归档：只把这条申请记录标为「已确认」，数仓里的流水一笔没动");
+          renderReqBoxes();
+          resetFlowIntake();          /* 归档后流水接入回到初始「导入流水」界面（数据保留） */
+        }
+        else flash("确认失败，请重试", true);
       }).catch(function(){ alert("确认失败：确认数仓服务在运行"); });
     return;
   }
@@ -3987,6 +4254,7 @@ document.addEventListener("click",e=>{
   if(e.target.closest("[data-arch]")){ openArch(); return; }
   if(e.target.closest("#archClose")){ closeArch(); return; }
   if(e.target.closest("[data-asort]")){ S.archSort=(S.archSort==="asc")?"desc":"asc"; renderArch(); return; }
+  if(e.target.closest("[data-ascope]")){ S.archScope=(S.archScope==="all")?"batch":"all"; S.archEdit=null; renderArch(); return; }
   const anv=e.target.closest("[data-anav]");
   if(anv){
     const list=archRows(), dir=+anv.dataset.anav;
@@ -4017,7 +4285,9 @@ document.addEventListener("click",e=>{
   if(hall){
     const base=(typeof API!=="undefined"?API:"");
     fetch(base+"/api/flow-edits").then(function(x){return x.json();}).then(function(d){
-      S.mHist={rid:"", cp:"全部流水（最近 200 条字段修改）", d:"", rows:d.rows||[]};
+      /* 只留人工编辑留下的记录 */
+      const rows=(d.rows||[]).filter(histIsManual);
+      S.mHist={rid:"", cp:"人工编辑记录（最近 200 条）", d:"", rows:rows};
       renderManual();
       const box=document.getElementById("mHistBox");
       if(box) box.scrollIntoView({block:"nearest"});
@@ -4030,7 +4300,7 @@ document.addEventListener("click",e=>{
   if(al){
     ["其他"].forEach(v=>{ if(!D1.includes(v)) D1.push(v); if(!D2.includes(v)) D2.push(v); if(!DCF.includes(v)) DCF.push(v); });
     saveDicts();
-    mAllRows().filter(r=>!mState(r).ok).forEach(r=>{ S.manual[manualKey(r.d,r.amt,r.cp)]={l1:"其他",l2:"其他",cf:"其他"}; });
+    mScopeRows().filter(r=>!mState(r).ok).forEach(r=>{ S.manual[manualKey(r.d,r.amt,r.cp)]={l1:"其他",l2:"其他",cf:"其他"}; });
     saveManual();
     flushManual("all-other");
     renderManual(); return; }

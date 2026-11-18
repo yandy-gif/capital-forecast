@@ -27,9 +27,13 @@ test('refresh restores imported rows and the selected workflow step',async()=>{
   const h=await boot({serverBoot:true});let store,flow;
   try{
     await upload(h);
-    h.w.document.querySelector('[data-step="3"]').click();await tick();
+    /* 步骤条已按需求改为不可点击（进入人工审核必须点「下一步：人工审核」），
+       本用例只验证「刷新能恢复当前步骤」，所以直接置位并触发 pagehide 落盘。 */
+    h.state.S.step=3;
+    h.w.dispatchEvent(new h.w.Event('pagehide'));
     store=h.store();flow=clone(h.db.flow);
     assert.equal(flow.length,1);
+    assert.equal(JSON.parse(store['pryan.workspace']).state.step,3);
   }finally{h.close();}
   const r=await boot({store,flow,serverBoot:true});
   try{
