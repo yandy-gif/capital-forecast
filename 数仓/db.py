@@ -140,6 +140,8 @@ def save_flow(rows, file_name="上传文件", batch=None):
     same = {}
     for x in conn.execute("SELECT id, row_no, row_json FROM ods_flow WHERE file_name=?", (file_name,)):
         same[x["row_no"]] = (x["id"], x["row_json"] or "{}")
+    old_batches = {x["batch"] for x in conn.execute(
+        "SELECT DISTINCT batch FROM ods_flow WHERE file_name=?", (file_name,))} - {batch}
     n = 0
     upd = 0
     skipped = 0
@@ -172,7 +174,14 @@ def save_flow(rows, file_name="上传文件", batch=None):
             (batch, file_name, i, json.dumps(r, ensure_ascii=False)),
         )
         n += 1
+    conn.execute("DELETE FROM import_log WHERE kind='flow' AND file_name=?", (file_name,))
     conn.execute("INSERT INTO import_log(kind,file_name,rows,batch) VALUES('flow',?,?,?)", (file_name, n + upd, batch))
+    # 重新导入＝替换：旧批次里没被新文件覆盖到的残留行（新文件行数变少时）一并清掉
+    for b in old_batches:
+        if b and b != batch:
+            conn.execute("DELETE FROM ods_flow WHERE file_name=? AND batch=?", (file_name, b))
+            conn.execute("DELETE FROM flow_edit_log WHERE batch=?", (b,))
+            conn.execute("DELETE FROM import_log WHERE kind='flow' AND batch=?", (b,))
     conn.commit()
     conn.close()
     set_meta("active_batch_flow", batch)
@@ -231,6 +240,50 @@ def set_request_status(rid, status, actor=""):
     conn.commit()
     conn.close()
     return {"ok": bool(n), "id": rid, "status": status}
+
+
+def find_request_by_note(kind, marker):
+    """按 note 里的标记（如「提报单 #43」）找最新一条申请记录，用于同一条记录随流程改状态。"""
+    conn = connect()
+    _ensure_request_schema(conn)
+    row = conn.execute(
+        "SELECT id FROM import_request WHERE kind=? AND note LIKE ? ORDER BY id DESC LIMIT 1",
+        (kind, "%" + marker + "%")).fetchone()
+    conn.close()
+    return row["id"] if row else None
+
+
+def upsert_flow_request(title, batch="", rows=0, actor="", note="导入"):
+    """同一份流水文件只保留一条申请记录：重新导入时更新原记录，不再堆重复行。"""
+    conn = connect()
+    _ensure_request_schema(conn)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row = conn.execute("SELECT id FROM import_request WHERE kind='flow' AND title=? "
+                       "ORDER BY id DESC LIMIT 1", (title,)).fetchone()
+    if row:
+        rid = row["id"]
+        conn.execute(
+            "UPDATE import_request SET batch=?, rows=?, status='已完成', actor=COALESCE(NULLIF(?,''),actor), "
+            "note=?, updated_at=? WHERE id=?",
+            (batch or "", int(rows or 0), actor or "", note or "导入", now, rid))
+    else:
+        cur = conn.execute(
+            "INSERT INTO import_request(kind,title,batch,rows,status,actor,note,created_at,updated_at) "
+            "VALUES('flow',?,?,?,'已完成',?,?,?,?)",
+            (title, batch or "", int(rows or 0), actor or "本地用户", note or "导入", now, now))
+        rid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def update_request_note(rid, note):
+    conn = connect()
+    _ensure_request_schema(conn)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute("UPDATE import_request SET note=?, updated_at=? WHERE id=?", (note, now, rid))
+    conn.commit()
+    conn.close()
 
 
 # ---------------- 原始流水修改（备注/户名/金额/方向/日期） ----------------
@@ -600,7 +653,7 @@ def monthly_balances():
         key = dt + " " + str(d.get("交易时间") or "")
         k = (acct, ym)
         if k not in last or key >= last[k][0]:
-            last[k] = (key, b)
+            last[k] = (key, b, dt)
         months.setdefault(ym, set()).add(acct)
 
     # 逐月推进：某账户该月无记录则沿用上次余额
@@ -609,10 +662,18 @@ def monthly_balances():
     for ym in sorted(months):
         for acct in list(known):
             pass
-        for (acct, m2), (key, b) in last.items():
+        for (acct, m2), (key, b, dt) in last.items():
             if m2 == ym:
                 known[acct] = b
         row = {a: round(v, 2) for a, v in known.items()}
         row["_total"] = round(sum(row.values()), 2)
         by_month[ym] = row
-    return {"byMonth": by_month, "accounts": sorted({a for a, _ in last})}
+
+    # 各账户在该月「最后一天」的余额：日期最大的那条流水余额（审核/解释用）
+    last_day = {}
+    for (acct, ym), (key, b, dt) in last.items():
+        cur = last_day.setdefault(ym, {}).get(acct)
+        if not cur or dt >= cur.get("date", ""):
+            last_day[ym][acct] = {"date": dt, "bal": round(b, 2)}
+    return {"byMonth": by_month, "accounts": sorted({a for a, _ in last}),
+            "lastDay": last_day}

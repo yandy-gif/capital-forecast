@@ -32,6 +32,7 @@
 import os
 import sys
 import json
+import hashlib
 import mimetypes
 import shutil
 import tempfile
@@ -134,26 +135,59 @@ def sync_locked_plan():
 # 数仓模式启动脚本：页面加载完从数仓拉数
 BOOT = r"""
 <script>
-(async function(){
+(function(){
+  /* 连数仓要能自愈：服务重启、端口刚起来的 1~2 秒、睡眠恢复网络，
+     都可能让页面首屏连不上；原来只试一次就永久停在「数仓未连接」，
+     之后所有导入都只进内存（看着像"导入了没反应"）。这里失败就自动重连，
+     连上后重新取数，并把徽标做成可点的重连入口。 */
   var badge=document.getElementById("whBadge");
-  try {
-    var health=await fetch("/api/health",{cache:"no-store"});
-    if(!health.ok) throw new Error("数仓未连接");
-    WH.on=true;
-    var d=await window.WH_REFRESH();
-    if(!d) throw new Error("数仓取数失败");
-    var rules=await fetch("/api/rules",{cache:"no-store"}).then(r=>r.json());
-    await WH.restoreRules(rules.payload ? JSON.parse(rules.payload) : null);
-    window.WH_RECOMPUTE();
-    await flushImports();
-    if(badge){badge.style.display="inline-flex";badge.title="数据来自本地数仓："+d.flow.length+" 笔流水 / "+d.plan.length+" 行计划";}
-    goHash();
-  }catch(e){WH.on=false;if(badge){badge.style.display="inline-flex";badge.textContent="数仓未连接";} }
+  var tries=0;
+  function setBadge(text,title,ok){
+    if(!badge) return;
+    badge.style.display="inline-flex";
+    badge.textContent=text;
+    badge.title=title||"";
+    badge.style.cursor=ok?"default":"pointer";
+    badge.onclick=ok?null:function(){ location.reload(); };
+  }
   function goHash(){
     var h=(location.hash||"").replace("#","");
     if(/^p[0-8]$/.test(h) && typeof showTab==="function")showTab(h);
   }
+  async function boot(){
+    tries++;
+    try{
+      var health=await fetch("/api/health",{cache:"no-store"});
+      if(!health.ok) throw new Error("HTTP "+health.status);
+      var h=await health.json();
+      if(h && h.html_build && window.WH_PAGE_BUILD &&
+         String(h.html_build)!==String(window.WH_PAGE_BUILD)){
+        /* 服务端的看板文件比本页新：跑的是旧 JS，重连也没用，等用户刷新 */
+        WH.on=false;
+        setBadge("○ 看板已更新，请按 Ctrl+F5","服务端看板文件已更新，当前页面仍是旧版本，刷新后即可恢复",false);
+        return;
+      }
+      WH.on=true;
+      var rules=await fetch("/api/rules",{cache:"no-store"}).then(function(r){return r.json();});
+      await WH.restoreRules(rules.payload ? JSON.parse(rules.payload) : null);
+      var d=await window.WH_REFRESH();
+      if(!d) throw new Error("取数失败");
+      /* PR#1 的两步：先按新数据重算各页，再把本机草稿导入补写进数仓 */
+      try{ window.WH_RECOMPUTE(); }catch(e0){}
+      try{ if(typeof flushImports==="function") await flushImports(); }catch(e1){}
+      setBadge("● 本地数仓","数据来自本地数仓："+d.flow.length+" 笔流水 / "+d.plan.length+" 行计划",true);
+      window.__WH_TRIES=tries;
+      goHash();
+    }catch(e){
+      WH.on=false;
+      setBadge("○ 数仓未连接（点此重连）",
+        "连不上本地数仓：" + ((e && e.message) || "") + "　点一下徽标会重新载入页面", false);
+      /* 前 15 次每 2 秒一次（覆盖服务刚重启的空窗），之后每 10 秒，最多 60 次 */
+      setTimeout(boot, tries<15 ? 2000 : 10000);
+    }
+  }
   window.addEventListener("hashchange",goHash);
+  boot();
 })();
 </script>
 """
@@ -241,6 +275,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.serve_html()
         if path == "/api/health":
             return self._json({"ok": True, "db": db.DB_PATH, "html": HTML_NAME,
+                               "html_build": self._html_build(),
                                "stats": db.stats(), "eco": db_eco.eco_stats()})
 
         # ---- 原有 ----
@@ -290,6 +325,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/locked":
             return self._json({"ok": True,
                                "items": db_eco.locked_items(q.get("period"), q.get("entity"))})
+        if path == "/api/appendix":
+            return self._json({"ok": True,
+                               "items": db_eco.appendix_rows(q.get("period"), q.get("entity"))})
         return self._send(404, b"not found", "text/plain; charset=utf-8")
 
     def do_POST(self):
@@ -331,9 +369,15 @@ class Handler(BaseHTTPRequestHandler):
             # 全部被判为重复（一行没写入）时不留申请记录，也不动 active 批次
             if eff > 0:
                 try:
-                    db.add_request("plan" if kind == "plan" else "flow", name, res.get("batch", ""),
-                                   eff, "已完成", body.get("actor") or "",
-                                   "导入" + ("（覆盖同文件同序号的行）" if res.get("updated") else ""))
+                    if kind == "plan":
+                        db.add_request("plan", name, res.get("batch", ""),
+                                       eff, "已完成", body.get("actor") or "",
+                                       "导入" + ("（覆盖同文件同序号的行）" if res.get("updated") else ""))
+                    else:
+                        # 同一份流水文件只留一条申请记录：重新导入＝替换旧记录
+                        db.upsert_flow_request(name, res.get("batch", ""), eff,
+                                               body.get("actor") or "",
+                                               "重新导入（覆盖原文件记录）" if res.get("updated") else "导入")
                 except Exception:
                     pass
             return self._json({"ok": True, "duplicated": eff == 0, **res})
@@ -470,7 +514,11 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, data, ctype, {"Content-Disposition": disp})
 
     def upload_plan(self):
-        """body = xlsx 原始字节；解析 → 三道闸门 → 建提报单（草稿或直接提交待审）"""
+        """body = xlsx 原始字节；文件去重 → 解析 → 三道闸门 → 建提报单（草稿或直接提交待审）
+
+        每次上传都会写「申请记录」（import_request，kind=plan）：
+        成功＝已上传（草稿）、解析失败＝失败、重复文件＝已拦截，均可在申请记录里追溯。
+        """
         raw = self._raw()
         if not raw:
             return self._json({"ok": False, "error": "没有收到文件内容"}, 400)
@@ -478,6 +526,26 @@ class Handler(BaseHTTPRequestHandler):
         period = self._hdr("X-Period")
         actor = self._hdr("X-Actor")
         auto_submit = self.headers.get("X-Submit") in ("1", "true", "True")
+
+        # ---- 文件级去重：同一份内容（SHA256）只允许建一张提报单 ----
+        file_sha = hashlib.sha256(raw).hexdigest()
+        dup_subs = db_eco.find_by_file_sha(file_sha)
+        if dup_subs:
+            d0 = dup_subs[-1]
+            try:
+                db.add_request("plan", name,
+                               "%s / %s" % (d0.get("entity") or "", d0.get("period") or ""),
+                               0, "已拦截", actor or "",
+                               "重复上传：文件内容与提报单 #%s（%s）完全相同" % (d0["id"], d0.get("status") or ""))
+            except Exception:
+                pass
+            return self._json({
+                "ok": False, "duplicate": True, "sub_id": d0["id"],
+                "error": "重复上传被拦截：这份文件的内容与提报单 #%s（%s · %s · %s）完全相同。"
+                         "请勿重复上传；要修改计划，请编辑文件内容后重新上传（会自动升版本），"
+                         "或对 #%s 走「发起变更」。"
+                         % (d0["id"], d0.get("period") or "", d0.get("entity") or "",
+                            d0.get("status") or "", d0["id"])}, 409)
 
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -495,7 +563,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             res = plan_parse.parse_plan(save_path, period=period or None, params=params)
         except Exception as e:
-            return self._json({"ok": False, "error": "解析失败：%s" % e, "file": safe}, 500)
+            try:
+                db.add_request("plan", safe, period or "", 0, "失败", actor or "",
+                               "解析异常：%s" % str(e)[:160])
+            except Exception:
+                pass
+            return self._json({"ok": False, "error": "解析失败：%s。请修正文件后重新上传。" % e,
+                               "file": safe}, 500)
         if not res.get("ok"):
             # 不是「已拆解的计划表」→ 按提报源表拆解（skill：销售/部门费用/人力 → by 月资金计划，C-01~C-09）
             try:
@@ -505,8 +579,15 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 cres = {"ok": False, "error": "拆解失败：%s" % e}
             if cres.get("ok"):
-                return self.create_from_claim(cres, safe, actor or "系统", auto_submit)
-            return self._json({"ok": False, "error": res.get("error"),
+                return self.create_from_claim(cres, safe, actor or "系统", auto_submit,
+                                              file_sha=file_sha)
+            try:
+                db.add_request("plan", safe, period or "", 0, "失败", actor or "",
+                               "解析失败：%s" % str(res.get("error") or "")[:160])
+            except Exception:
+                pass
+            return self._json({"ok": False,
+                               "error": "%s。请修正文件后重新上传。" % res.get("error"),
                                "claim_error": cres.get("error"),
                                "sheets": res.get("sheets"), "warnings": res.get("warnings"),
                                "saved_as": os.path.relpath(save_path, ROOT)}, 400)
@@ -539,11 +620,15 @@ class Handler(BaseHTTPRequestHandler):
             gates["G3"]["pass"] = False
 
         tpl = db_eco.tpl_get("TPL-05") or {}
+        # G2 里留一条「文件查重」结果，审批人在审核页能直接看到查过重、查的什么
+        gates["G2"]["issues"].insert(0, {
+            "type": "文件查重", "row": None,
+            "detail": "SHA256 %s…：库内无相同内容的提报单，查重通过" % file_sha[:12]})
         sub_id = db_eco.submission_create(
             {"entity": entity, "period": period, "version": version, "file_name": safe,
              "tpl_ver": tpl.get("version"), "rule_ver": tpl.get("rule_ver"),
              "status": "草稿", "inflow": res["inflow"], "outflow": res["outflow"],
-             "net": res["net"], "gates": gates},
+             "net": res["net"], "gates": gates, "file_sha": file_sha},
             res["items"], actor=actor or "系统")
 
         try:
@@ -563,6 +648,15 @@ class Handler(BaseHTTPRequestHandler):
         elif auto_submit:
             msg = "已创建提报单 #%d，但 G1 未通过（%d 处错误），需修正后再提交" % (
                 sub_id, gates["G1"]["error"])
+
+        # 上传成功 → 写申请记录（审批各环节的状态变化由 submission-action 继续追加）
+        try:
+            db.add_request("plan", safe, "%s / %s" % (entity, period), len(res["items"]),
+                           "已上传", actor or "",
+                           "资金计划上传（提报单 #%d · v%d · %s%s）"
+                           % (sub_id, version, "已提交待审" if auto_submit and gates["G1"]["pass"] else "草稿", msg_ap))
+        except Exception:
+            pass
 
         return self._json({
             "ok": True, "sub_id": sub_id, "message": msg,
@@ -621,12 +715,25 @@ class Handler(BaseHTTPRequestHandler):
                 plan_rows = sync_locked_plan()
         except Exception as e:
             plan_rows = "sync_error:%s" % e
+        # 申请记录一条上传只留一条：流程推进时更新同一条记录的状态
+        # （已上传 → 待审 → 已确认 / 已退回），不再每个环节各落一条相同记录
         try:
             sub = db_eco.submission_get(sid) or {}
-            db.add_request("plan", sub.get("file_name") or "资金计划表",
-                           "%s / %s" % (sub.get("entity") or "", sub.get("period") or ""),
-                           sub.get("rows") or 0, "已完成", body.get("actor") or "",
-                           "资金计划上传（%s）" % (sub.get("status") or status))
+            st_map = {"提交": "待审", "批准": "已确认", "退回": "已退回", "核销": "已确认"}
+            new_st = st_map.get(action)
+            if new_st:
+                locked = status in ("已锁定", "已核销")
+                note = "资金计划%s（提报单 #%d · %s%s）" % (
+                    action, sid, sub.get("status") or status,
+                    " · 数据已写入数仓" if locked else "")
+                rid = db.find_request_by_note("plan", "提报单 #%d" % sid)
+                if rid:
+                    db.set_request_status(rid, new_st, body.get("actor") or "")
+                    db.update_request_note(rid, note)
+                else:
+                    db.add_request("plan", sub.get("file_name") or "资金计划表",
+                                   "%s / %s" % (sub.get("entity") or "", sub.get("period") or ""),
+                                   sub.get("item_count") or 0, new_st, body.get("actor") or "", note)
         except Exception:
             pass
         return self._json({"ok": True, "message": msg, "status": status,
@@ -635,7 +742,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
     # ---------- 提报源表拆解结果 → 逐期间建提报单 ----------
-    def create_from_claim(self, cres, file_name, actor, auto_submit):
+    def create_from_claim(self, cres, file_name, actor, auto_submit, file_sha=None):
         made = []
         rules = cres.get("rules") or {}
         for pd in cres["periods"]:
@@ -671,7 +778,7 @@ class Handler(BaseHTTPRequestHandler):
                 {"entity": cres["entity"], "period": pd["period"], "version": version,
                  "file_name": file_name, "tpl_ver": "源表拆解", "rule_ver": "v1",
                  "status": "草稿", "inflow": pd["inflow"], "outflow": pd["outflow"],
-                 "net": pd["net"], "gates": gates},
+                 "net": pd["net"], "gates": gates, "file_sha": file_sha},
                 items, actor=actor)
             st = "草稿"
             if auto_submit and gates["G1"]["pass"]:
@@ -690,8 +797,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             db.add_request("plan", file_name or "资金计划表",
                            "%s / %s" % (cres["entity"], ",".join(m["period"] for m in made)),
-                           sum(m["rows"] for m in made), "已完成", actor or "",
-                           "资金计划导入（%d 张提报单）" % len(made))
+                           sum(m["rows"] for m in made), "已上传", actor or "",
+                           "资金计划导入（提报单 %s）" % "/".join("#%d" % m["sub_id"] for m in made))
         except Exception:
             pass
         return self._json({
@@ -707,14 +814,23 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     # ---------- 静态 ----------
+    def _html_build(self):
+        """看板文件的版本戳：文件一改动就变。页面拿它和自己加载时的那份比对，
+        用来识别「浏览器里跑的还是旧版本 JS」——旧版本会静默丢文件，最难排查。"""
+        try:
+            return str(int(os.path.getmtime(os.path.join(ROOT, HTML_NAME))))
+        except OSError:
+            return "0"
+
     def serve_html(self):
         p = os.path.join(ROOT, HTML_NAME)
         if not os.path.exists(p):
             return self._send(404, ("找不到看板文件：" + HTML_NAME).encode("utf-8"),
                               "text/plain; charset=utf-8")
         html = open(p, encoding="utf-8").read()
+        stamp = '<script>window.WH_PAGE_BUILD="%s";</script>' % self._html_build()
         if "</body>" in html:
-            html = html.replace("</body>", BOOT + "</body>", 1)
+            html = html.replace("</body>", stamp + BOOT + "</body>", 1)
         return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
 
     def serve_db(self):
@@ -812,8 +928,14 @@ a.dl{font-size:12px;color:#185FA5}
         self.wfile.write(data)
 
     def log_message(self, fmt, *args):
-        if "/api/" in (args[0] if args else ""):
-            sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+        # send_error() 会把 HTTPStatus 传进来（HEAD/PUT 这类 501），直接 % 拼会抛
+        # TypeError，连接被吞、日志里只剩堆栈，真正的错误反而看不到。
+        try:
+            msg = fmt % args
+        except Exception:
+            msg = str(fmt)
+        if "/api/" in msg:
+            sys.stderr.write("%s - %s\n" % (self.address_string(), msg))
 
 
 if __name__ == "__main__":

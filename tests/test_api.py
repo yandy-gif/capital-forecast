@@ -92,7 +92,12 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(upd['updated'],1)
         self.assertFalse(upd['duplicated'])
         self.assertEqual(len(self.call('/api/rows')[1]['flow']),1)
-        self.assertEqual(len(self.call('/api/requests')[1]['rows']),2)
+        # 同一份文件重导＝替换台账（2026-11-19 需求：一个文件只留一条申请记录），
+        # 所以这里仍是 1 条，但备注要变成「重新导入」——用例意图仍是"不刷出无意义记录"
+        reqs=self.call('/api/requests')[1]['rows']
+        self.assertEqual(len(reqs),1)
+        self.assertIn('重新导入',reqs[0].get('note') or '')
+        self.assertEqual(reqs[0]['rows'],1)
 
     def test_reset_requires_confirmation_and_preserves_data_when_cancelled(self):
         db.save_flow([{'交易日期':'2026-11-01','收支方向':'收','金额':100,'对方户名':'测试客户'}])
@@ -166,5 +171,34 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(self.call('/api/submission-action',{'id':sid,'action':'核销','actor':'回归测试'})[1]['ok'])
         server.sync_locked_plan()
         self.assertEqual(len(self.call('/api/rows')[1]['plan']),before)
+
+    def test_appendix_detail_is_served_for_locked_plan(self):
+        """资金计划 + 附页一起上传：附页明细要能被 /api/appendix 取到（管理视角/下钻的计划明细来源）"""
+        wb=load_workbook(io.BytesIO(self.call('/api/template?id=TPL-05')[1]))
+        self.assertIn('附页1 销售回款明细',wb.sheetnames)
+        self.assertIn('附页2 费用申报明细',wb.sheetnames)
+        ws=wb['预算明细']
+        for i,(d,subj,amt) in enumerate([('流入','销售回款（商品/渠道分销）',100),
+                                          ('流出','市场推广及渠道佣金',40)]):
+            values=[i+1,'测试主体','测试板块','境内','CNY',d,'经营活动',subj,amt,None,'上旬','测试','草稿','']
+            for col,value in enumerate(values,1):ws.cell(4+i,col,value)
+        ap1=wb['附页1 销售回款明细']
+        for col,value in enumerate(['测试客户','KA','测试商品',10,10,1,100,'1','测试','附页回款'],1):ap1.cell(3,col,value)
+        ap2=wb['附页2 费用申报明细']
+        for col,value in enumerate(['市场部','测试投放',40,'2','附页费用'],1):ap2.cell(3,col,value)
+        stream=io.BytesIO();wb.save(stream);wb.close()
+        code,d=self.call('/api/upload-plan',raw=stream.getvalue(),
+                         headers={'Content-Type':'application/octet-stream','X-File-Name':quote('附页测试_2026年12月.xlsx'),
+                                  'X-Period':'2026-12','X-Actor':quote('回归测试')})
+        self.assertEqual(code,200,d)
+        sid=d['sub_id']
+        for action in ['提交','批准']:
+            code,result=self.call('/api/submission-action',{'id':sid,'action':action,'actor':'回归测试'})
+            self.assertEqual(code,200,result);self.assertTrue(result['ok'],result)
+        items=self.call('/api/appendix?period=2026-12')[1]['items']
+        self.assertEqual(len(items),2,items)
+        self.assertEqual({x['kind'] for x in items},{'销售回款明细','费用申报明细'})
+        self.assertEqual(sum(x['amount'] for x in items),140)
+        self.assertEqual(self.call('/api/appendix?period=2027-03')[1]['items'],[])
 
 if __name__=='__main__':unittest.main()

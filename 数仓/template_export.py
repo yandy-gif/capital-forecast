@@ -30,6 +30,18 @@ def plan_template():
     fx.append(["币种", "名称", "汇率(人民币)"])
     for r in data["fx"]:
         fx.append([r.get("currency"), r.get("name"), float(params.get("fx." + r["currency"], r["rate_cny"]))])
+
+    # 附页：可选填。填了按这里的逐条明细追溯；不填系统按「预算明细」逐行自动生成，
+    # 保证审批页永远能看到与主表一一对应的底稿。
+    ap1 = wb.create_sheet("附页1 销售回款明细")
+    ap1.append(["可选填写：回款按 客户×商品 逐条列示；不填则由系统按「预算明细」的流入行自动生成。"])
+    ap1.merge_cells("A1:J1")
+    ap1.append(["客户", "客户类型", "商品名称", "件数", "售价", "扣率", "回款金额",
+                "源表行号", "提报人", "说明"])
+    ap2 = wb.create_sheet("附页2 费用申报明细")
+    ap2.append(["可选填写：费用按 部门×费用项目 逐条列示；不填则由系统按「预算明细」的流出行自动生成。"])
+    ap2.merge_cells("A1:F1")
+    ap2.append(["责任部门", "费用名称", "金额", "源表行号", "说明", "备注"])
     for column, formula in [
         ("B", 'INDIRECT("\'主体台账\'!$A$2:$A$%s")' % max(2, entities.max_row)),
         ("E", 'INDIRECT("\'记账汇率\'!$A$2:$A$%s")' % fx.max_row),
@@ -44,7 +56,7 @@ def plan_template():
         ws.add_data_validation(dv)
         dv.add("%s4:%s503" % (column, column))
     for sheet in wb:
-        header = 3 if sheet == ws else 1
+        header = 3 if sheet == ws else (2 if str(sheet.title).startswith("附页") else 1)
         sheet.freeze_panes = "A%d" % (header + 1)
         for cell in sheet[header]:
             cell.font = Font(color="FFFFFF", bold=True)
