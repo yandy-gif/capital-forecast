@@ -2954,8 +2954,8 @@ function renderP4(){
   document.getElementById("paCatTbl").innerHTML=`
     <thead><tr><th style="text-align:left">收支分类</th><th>预算</th><th>实际</th><th>偏差额</th><th>偏差率</th><th>完成率</th><th style="text-align:left;min-width:120px">偏差分布</th></tr></thead>
     <tbody>${rows.map(function(r){
-      const rate=r.rate===null?"—":pctTxt(r.rate);
-      const done=r.plan?((r.act/r.plan)*100).toFixed(0)+"%":"—";
+      const rate=(!samePeriod||r.rate===null)?"—":pctTxt(r.rate);
+      const done=(!samePeriod||!r.plan)?"—":((r.act/r.plan)*100).toFixed(0)+"%";
       const w=Math.max(3,Math.round(Math.abs(r.diff)/maxAbs*100));
       const col=r.diff>0?"#C0392B":"#2E8B57";
       const tag=(r.plan>0&&r.act===0)?'<span class="tag t-warn">预算有·实际无</span>'
@@ -2970,11 +2970,12 @@ function renderP4(){
     }).join("")}</tbody>
     <tfoot><tr><td>合计</td><td>${fmt(tPlan)}</td><td>${fmt(tAct)}</td>
       <td class="${tAct-tPlan>=0?'red':'green'}">${tAct-tPlan?((tAct-tPlan>0?"+":"−")+fmt(Math.abs(tAct-tPlan))):"—"}</td>
-      <td>${rateAll===null?"—":pctTxt(rateAll)}</td>
-      <td>${tPlan?((tAct/tPlan)*100).toFixed(0)+"%":"—"}</td><td></td></tr></tfoot>`;
+      <td>${(!samePeriod||rateAll===null)?"—":pctTxt(rateAll)}</td>
+      <td>${(!samePeriod||!tPlan)?"—":((tAct/tPlan)*100).toFixed(0)+"%"}</td><td></td></tr></tfoot>`;
   document.getElementById("paCatNote").innerHTML=
     `偏差率＝（实际−预算）÷预算，正数＝实际超预算。<b>完成率＝实际÷预算</b>，只对预算侧有数的类目计算。
-     预算按已锁定资金计划的科目经科目映射归到 7 大收支分类，未识别科目计入「其他」。`;
+     预算按已锁定资金计划的科目经科目映射归到 7 大收支分类，未识别科目计入「其他」。
+     ${samePeriod?"":"<b>当前计划与实际没有重叠月份，偏差率与完成率不计算</b>，上表只作预算/实际的并列参考。"}`;
 
   /* —— 按月 / 按季 —— */
   const gran=S.paGran||"m";
