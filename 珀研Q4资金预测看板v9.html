@@ -2860,11 +2860,22 @@ function renderP4(){
   const planMonths=[...new Set(Object.keys(planC).reduce(function(a,c){ return a.concat(Object.keys(planC[c]||{})); },[]))].sort();
   const months=[...new Set(actMonths.concat(planMonths))].sort();
   const hasPlan=planMonths.length>0;
-  const scopeLab=months.length?("期间："+months.map(function(m){ return m.replace(".","-"); }).join("、")+(hasPlan?"":"（仅实际）")):"还没有数据";
+  /* 同口径才可比：计划只覆盖 12 月、实际只有 7/8/11 月时，把两边总额直接相减会得出
+     一千多个百分点的假偏差。所以有重叠月份就按重叠期间比，没有就明确说"同期不可比"。 */
+  const bothMonths=months.filter(function(m){ return planMonths.indexOf(m)>=0 && actMonths.indexOf(m)>=0; });
+  const samePeriod=bothMonths.length>0;
+  const cmpMonths=samePeriod?bothMonths:months;
+  const scopeLab=(!months.length?"还没有数据"
+    :(hasPlan
+       ? (samePeriod
+          ? ("同期可比期间："+cmpMonths.map(function(m){ return m.replace(".","-"); }).join("、"))
+          : ("无同期可比：计划 "+planMonths.map(function(m){ return m.replace(".","-"); }).join("、")
+             +" / 实际 "+actMonths.map(function(m){ return m.replace(".","-"); }).join("、")))
+       : ("期间："+months.map(function(m){ return m.replace(".","-"); }).join("、")+"（仅实际）")));
 
   const rows=(typeof CATS!=="undefined"?CATS:[]).map(function(c){
-    const p=months.reduce(function(s,m){ return s+((planC[c]&&planC[c][m])||0); },0);
-    const a=months.reduce(function(s,m){ return s+((actC[c]&&actC[c][m])||0); },0);
+    const p=cmpMonths.reduce(function(s,m){ return s+((planC[c]&&planC[c][m])||0); },0);
+    const a=cmpMonths.reduce(function(s,m){ return s+((actC[c]&&actC[c][m])||0); },0);
     return {cat:c,plan:p,act:a,diff:a-p,rate:p?(a-p)/p:null};
   });
   const tPlan=rows.reduce(function(s,r){ return s+r.plan; },0);
@@ -2882,18 +2893,23 @@ function renderP4(){
   /* —— 三块 KPI：偏差率 / 口径匹配率 / 偏差主要来源 —— */
   const k=[
     {cls:"a",lab:"实际 vs 预算偏差率",tone:"rate",
-     txt:(hasPlan?pctTxt(rateAll):"待上传计划"),
-     hint:(hasPlan?("预算 "+fmt(tPlan)+" · 实际 "+fmt(tAct)+" · 差异 "+(tAct-tPlan>=0?"+":"−")+fmt(Math.abs(tAct-tPlan)))
-                 :"计划侧为空，下面只列实际口径")},
+     txt:(!hasPlan?"待上传计划":(samePeriod?pctTxt(rateAll):"同期不可比")),
+     hint:(!hasPlan?"计划侧为空，下面只列实际口径"
+           :(samePeriod?("同期 "+cmpMonths.map(function(m){ return m.replace(".","-"); }).join("、")
+                         +" · 预算 "+fmt(tPlan)+" · 实际 "+fmt(tAct)
+                         +" · 差异 "+(tAct-tPlan>=0?"+":"−")+fmt(Math.abs(tAct-tPlan)))
+             :("计划只有 "+planMonths.map(function(m){ return m.replace(".","-"); }).join("、")
+               +"，该期间还没有实际流水；两者期间不重叠，不能直接算偏差率")))},
     {cls:"b",lab:"口径匹配率",tone:"match",
      txt:(matchRate===null?"—":(matchRate*100).toFixed(1)+"%"),
      hint:(cov.total?("可映射 "+fmt(cov.可映射)+" ＋ 部分可映射 "+fmt(cov.部分可映射)+" ／ 分母 "+fmt(cov.total)):"还没有可比较的流水")},
     {cls:"c",lab:"偏差主要来自",tone:"top",
-     txt:(!hasPlan?"—":((top&&Math.abs(top.diff)>0)?top.cat:"基本一致")),
+     txt:(!hasPlan?"—":(!samePeriod?"同期不足":((top&&Math.abs(top.diff)>0)?top.cat:"基本一致"))),
      hint:(!hasPlan?"需要先有预算口径"
-           :((top&&Math.abs(top.diff)>0)
-             ?("占绝对偏差 "+(topShare*100).toFixed(0)+"% · "+(top.diff>0?"实际超预算":"实际低于预算")+" "+fmt(Math.abs(top.diff)))
-             :"预算与实际基本吻合"))}
+           :(!samePeriod?"计划与实际没有重叠月份，先不用它判断偏差来源"
+             :((top&&Math.abs(top.diff)>0)
+               ?("占绝对偏差 "+(topShare*100).toFixed(0)+"% · "+(top.diff>0?"实际超预算":"实际低于预算")+" "+fmt(Math.abs(top.diff)))
+               :"预算与实际基本吻合")))}
   ];
   document.getElementById("paKpis").innerHTML=k.map(function(x){
     let cls="", txt=x.txt;
@@ -2914,6 +2930,12 @@ function renderP4(){
       到「模块一 · 资金计划」上传并审核通过后，这里会自动切到预算口径。
       当前只有实际：${months.length} 个月、合计 <b>${fmt(tAct)} 元</b>。
       ${matchRate!==null?("口径匹配率 <b>"+(matchRate*100).toFixed(1)+"%</b>（未对上 "+(gapOnly.length+actOnly.length)+" 类）。"):""}</div>`;
+  }else if(!samePeriod){
+    bn.className="banner";
+    bn.innerHTML=`<div><b>期间不重叠，暂不可比</b>：计划只有 ${planMonths.map(function(m){ return m.replace(".","-"); }).join("、")}，
+      实际流水在 ${actMonths.map(function(m){ return m.replace(".","-"); }).join("、")}。
+      同期没有共同月份时不做偏差率判断（否则会出现几百上千个百分点的假偏差）。
+      把该月流水导进来，或补齐计划期间后这里会自动转成同期比较。</div>`;
   }else if(rateAll!==null&&Math.abs(rateAll)>=0.1){
     bn.className="banner bad";
     bn.innerHTML=`<div><b>偏差${rateAll>0?"超预算":"低于预算"} ${Math.abs(rateAll*100).toFixed(1)}%</b>：
