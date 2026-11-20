@@ -214,17 +214,39 @@ def bridge_save(rows):
 
 
 # ==================== 提报 / 明细 / 审批留痕 ====================
+def ensure_file_sha_column(conn):
+    """plan_submission.file_sha：上传文件的 SHA256，用于文件级去重。旧库自动补列。"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(plan_submission)")}
+    if "file_sha" not in cols:
+        conn.execute("ALTER TABLE plan_submission ADD COLUMN file_sha TEXT")
+        conn.commit()
+
+
+def find_by_file_sha(sha):
+    """按文件内容哈希查已存在的提报单（不含已作废），用于拦截重复上传。"""
+    if not sha:
+        return []
+    conn = connect()
+    ensure_file_sha_column(conn)
+    rs = conn.execute(
+        "SELECT id,entity,period,version,status,file_name FROM plan_submission "
+        "WHERE file_sha=? AND status!='已作废' ORDER BY id", (sha,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rs]
+
+
 def submission_create(meta, items, actor="系统"):
     conn = connect()
+    ensure_file_sha_column(conn)
     cur = conn.execute(
         """INSERT INTO plan_submission(entity,period,version,file_name,tpl_ver,rule_ver,status,item_count,
-                                       inflow,outflow,net,gate_report,submitter)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                       inflow,outflow,net,gate_report,submitter,file_sha)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (meta.get("entity") or "多主体", meta["period"], int(meta.get("version") or 1),
          meta.get("file_name"), meta.get("tpl_ver"), meta.get("rule_ver"),
          meta.get("status") or "草稿", len(items),
          float(meta.get("inflow") or 0), float(meta.get("outflow") or 0), float(meta.get("net") or 0),
-         json.dumps(meta.get("gates") or {}, ensure_ascii=False), actor))
+         json.dumps(meta.get("gates") or {}, ensure_ascii=False), actor, meta.get("file_sha")))
     sub_id = cur.lastrowid
     for i, it in enumerate(items, 1):
         conn.execute(
@@ -280,6 +302,10 @@ def submission_get(sub_id):
         d["gates"] = {}
     d["items"] = [dict(x) for x in conn.execute(
         "SELECT * FROM plan_item WHERE sub_id=? ORDER BY seq, id", (sub_id,))]
+    d["appendix"] = [dict(x) for x in conn.execute(
+        "SELECT * FROM plan_appendix WHERE sub_id=? ORDER BY kind, id", (sub_id,))]
+    d["appendix_sales"] = [x for x in d["appendix"] if x.get("kind") == "销售回款明细"]
+    d["appendix_expense"] = [x for x in d["appendix"] if x.get("kind") == "费用申报明细"]
     d["logs"] = [dict(x) for x in conn.execute(
         "SELECT * FROM approval_log WHERE sub_id=? ORDER BY id", (sub_id,))]
     conn.close()
@@ -427,6 +453,26 @@ def locked_items(period=None, entity=None):
         sql += " AND i.entity=?"
         args.append(entity)
     sql += " ORDER BY s.period, i.entity, i.direction, i.subject"
+    rs = conn.execute(sql, args).fetchall()
+    conn.close()
+    return [dict(r) for r in rs]
+
+
+def appendix_rows(period=None, entity=None):
+    """已锁定（含已核销）计划的附页明细 —— 管理视角/下钻看「客户×商品 / 部门×费用项」这一层"""
+    conn = connect()
+    sql = ("SELECT s.id AS sub_id, s.period, s.version, s.status, s.entity, a.id, a.kind, a.customer, "
+           "a.klass, a.product, a.dept, a.item, a.qty, a.price, a.rate, a.amount, a.src_row, a.note "
+           "FROM plan_appendix a JOIN plan_submission s ON s.id=a.sub_id "
+           "WHERE s.status IN ('已锁定','已核销')")
+    args = []
+    if period:
+        sql += " AND s.period=?"
+        args.append(period)
+    if entity:
+        sql += " AND a.entity=?"
+        args.append(entity)
+    sql += " ORDER BY s.period, a.kind, a.id"
     rs = conn.execute(sql, args).fetchall()
     conn.close()
     return [dict(r) for r in rs]

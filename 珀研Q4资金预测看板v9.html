@@ -49,7 +49,7 @@ nav button.on b{background:var(--navy);color:#fff}
 .g32{grid-template-columns:1.3fr 1fr}.g23{grid-template-columns:1fr 1.35fr}
 
 /* kpi */
-.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
 .kpi{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 15px;position:relative;overflow:hidden}
 .kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--blue)}
 .kpi.a::before{background:var(--blue)}.kpi.b::before{background:var(--in)}
@@ -58,6 +58,17 @@ nav button.on b{background:var(--navy);color:#fff}
 .kpi .val{font-size:21px;font-weight:700;margin-top:5px;font-variant-numeric:tabular-nums;letter-spacing:-.4px}
 .kpi .hint{font-size:10.5px;color:var(--muted);margin-top:3px}
 .red{color:var(--in)}.green{color:var(--out)}.amber{color:var(--warn)}
+/* 管理视角 · 安全线内联编辑 */
+.safebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#fff;border:1px solid var(--line);
+  border-radius:10px;padding:10px 14px;margin-bottom:12px}
+.safebar .safelab{font-size:12px;font-weight:700;color:var(--navy)}
+.safebar .safein{display:inline-flex;align-items:center;border:1px solid #D5DBE5;border-radius:7px;
+  background:#FCFDFF;padding:0 8px;gap:4px}
+.safebar .safein:focus-within{border-color:var(--navy);background:#fff;box-shadow:0 0 0 3px #EEF2F8}
+.safebar .safein input{border:none;outline:none;background:transparent;width:150px;padding:7px 0;
+  font-size:14px;font-weight:700;color:var(--navy);font-variant-numeric:tabular-nums;font-family:inherit}
+.safebar .safein i{font-style:normal;font-size:11px;color:var(--muted)}
+.safebar .safetip{font-size:11.5px;color:var(--muted)}
 
 .banner{display:flex;gap:10px;background:var(--warnbg);border:1px solid #F6C86A;border-left:4px solid var(--warn);
   border-radius:8px;padding:11px 14px;margin-bottom:14px;font-size:12.5px;color:#7C4A03}
@@ -158,7 +169,7 @@ footer{font-size:11px;color:var(--muted);border-top:1px solid var(--line);paddin
   <div class="wrap">
     <div>
       <h1>珀研生物 · 资金预测与预实分析看板</h1>
-      <div class="sub">v9 · 数据接入 / 管理视角 / 下钻分析 / 收支明细 / 预实分析 / 输出报表　｜　期间与数据以当前数仓为准　·　更新 2026-11-17</div>
+      <div class="sub">三模块：一 数据（流水接入 / 资金计划 / 预实比对）· 二 分析（管理视角 / 下钻 / 明细 / 预实）· 三 测算 II 期（参数假设 / 输出报表）　｜　期间与数据以当前数仓为准</div>
     </div>
     <div class="controls">
       <button class="btn ghost" id="resetTestData" style="background:#fff;color:#9b3028" title="清空全部测试内容并恢复初始配置">重置测试数据</button>
@@ -184,7 +195,7 @@ footer{font-size:11px;color:var(--muted);border-top:1px solid var(--line);paddin
 
 <!-- ============ 0 数据接入 ============ -->
 <section class="pane" id="p0">
-  <div class="pane-title"><h2>模块〇 · 数据接入</h2><span>银行流水 + 资金计划 + 参数，三源合一是后续所有分析的前提</span></div>
+  <div class="pane-title"><h2>模块一 · 数据接入</h2><span>银行流水 + 资金计划 + 参数，三源合一是后续所有分析的前提</span></div>
 
   <div class="grid g3">
     <div class="card">
@@ -230,7 +241,12 @@ footer{font-size:11px;color:var(--muted);border-top:1px solid var(--line);paddin
 
 <!-- ============ 1 管理视角 ============ -->
 <section class="pane" id="p1">
-  <div class="pane-title"><h2>模块一 · 管理视角</h2><span>一屏看清：现在有多少钱、这个月进出多少、下个月会不会缺钱</span></div>
+  <div class="pane-title"><h2>模块二 · 管理视角</h2><span>一屏看清：现在有多少钱、这个月进出多少、会不会跌破安全线</span></div>
+  <div class="safebar">
+    <span class="safelab">资金安全线</span>
+    <span class="safein"><input id="safeInput" type="number" min="0" step="10000" inputmode="numeric" placeholder="如 2000000"><i>元</i></span>
+    <span class="safetip" id="safeTip">改动即写入数仓，缺口预警随填随算</span>
+  </div>
   <div class="kpis" id="kpis1"></div>
   <div class="banner" id="banner1"></div>
 
@@ -293,7 +309,7 @@ footer{font-size:11px;color:var(--muted);border-top:1px solid var(--line);paddin
 
 <!-- ============ 3 收支明细 ============ -->
 <section class="pane" id="p3">
-  <div class="pane-title"><h2>模块三 · 收支明细</h2><span>资金计划 + 全部银行流水（笔数见右上），可按方向、金额、科目逐笔筛查并导出</span></div>
+  <div class="pane-title"><h2>模块二 · 收支明细</h2><span>资金计划 + 全部银行流水（笔数见右上），可按方向、金额、科目逐笔筛查并导出</span></div>
   <div class="card">
     <div class="filters">
       <div class="chips" style="margin:0">
@@ -314,40 +330,37 @@ footer{font-size:11px;color:var(--muted);border-top:1px solid var(--line);paddin
 
 <!-- ============ 4 预实分析 ============ -->
 <section class="pane" id="p4">
-  <div class="pane-title"><h2>模块四 · 预实分析</h2><span>差异在哪、完成率多少、哪些是好事哪些是坏事</span></div>
+  <div class="pane-title"><h2>模块二 · 预实分析</h2><span>实际 vs 预算：偏差率、口径匹配率、按分类看偏差主要来自哪</span></div>
 
-  <div class="grid g2">
-    <div class="card">
-      <h3>口径匹配度 <span>实际流水能否映射到计划科目</span></h3>
-      <div id="covMini"></div>
-    </div>
-    <div class="card">
-      <h3>客户口径断裂 <span>计划 KA 客户 vs 实际回款客户</span></h3>
-      <div id="custGap"></div>
-    </div>
-  </div>
+  <div class="kpis" id="paKpis"></div>
+  <div class="banner" id="paBanner"></div>
 
   <div class="card" style="margin-bottom:14px">
-    <h3>偏差率排行 · 按收支分类 <span>Q3 实际月均 vs Q4 计划月均</span></h3>
-    <div id="paRank"></div>
-    <div class="note">红色＝计划高于实际，绿色＝计划低于实际。<b>绿色不等于利好</b>——税费、采购付款的绿色恰恰是计划漏项，需结合下方归因判断。分类为粗口径映射（销售收款含其它经销商回款），详见口径匹配度区块。</div>
+    <h3>按收支分类 · 偏差率 <span id="paScope"></span></h3>
+    <div style="overflow-x:auto"><table id="paCatTbl"></table></div>
+    <div class="note" id="paCatNote"></div>
   </div>
 
   <div class="grid g2">
     <div class="card">
-      <h3>按科目的计划 vs 实际 <span>Q3 月均 vs Q4 月均</span></h3>
-      <div id="paSubj"></div>
+      <h3>按月 / 按季 <span id="paGranLab"></span></h3>
+      <div class="filters" style="margin:6px 0 8px"><span class="chips">
+        <button class="chip on" data-pag="m">按月</button>
+        <button class="chip" data-pag="q">按季</button>
+      </span></div>
+      <div style="overflow-x:auto"><table id="paTrend"></table></div>
+      <div class="note" id="paTrendNote"></div>
     </div>
     <div class="card">
-      <h3>归因结论 <span>自动生成</span></h3>
-      <div id="attr"></div>
+      <h3>口径匹配 · 未匹配清单 <span>自动列出哪几类没对上</span></h3>
+      <div id="paGap"></div>
     </div>
   </div>
 </section>
 
 <!-- ============ 5 输出报表 ============ -->
 <section class="pane" id="p5">
-  <div class="pane-title"><h2>模块五 · 输出报表</h2><span>月度损益（By 月度）/ 季度全景（By 季度）/ 现金流计划 / 预实摘要，均可导出 CSV</span></div>
+  <div class="pane-title"><h2>模块三 · 输出报表（II期）</h2><span>月度损益（By 月度）/ 季度全景（By 季度）/ 现金流计划 / 预实摘要，均可导出 CSV</span></div>
 
   <div class="card" style="margin-bottom:14px">
     <h3>输出① 月度损益预测表　<span>By 月度：收入按四渠道拆开、费用按明细科目拆开，单位：元</span>
@@ -464,6 +477,7 @@ const S = {scen:"full", cash:0, safe:0, company:"珀研",
            tab:"p0", wfMonth:0, drillCat:"销售收款", drillAct:"经营", drillCo:"珀研",
            dSrc:"plan", dMonth:"all", dCat:"all", dKw:"", dDir:"all", dMin:0, thr:0, penSrc:"act",
            step:1, manual:{}, confirmed:false, ruleView:"text", ruleEdit:-1, chat:[], draft:null,
+           paGran:"m",
            raw:{flow:null,plan:null}, applied:true, applyInfo:null, rawName:"", savedAt:""};
 
 /* 可编辑业务参数 */
@@ -739,6 +753,35 @@ function waterfallAct(m){
     .concat(body).concat([{k:"期末余额",v:end,type:"t"}]));
 }
 
+/* 计划月瀑布：数据来自已审批的资金计划（DATA.plan），科目按 PLAN2CAT/ECO2CAT 匹配归类到收支分类；
+   该月还没有银行流水，所以没有期初/期末余额柱，只有分类柱 + 计划净额 */
+function waterfallPlan(m){
+  const mk=String(m).replace(".","-").slice(0,7);
+  const rows=(DATA.plan||[]).filter(r=>String(r.month||"").replace(".","-").slice(0,7)===mk);
+  const byCat={};
+  let net=0;
+  rows.forEach(function(r){
+    const c=(typeof PLAN2CAT!=="undefined"&&PLAN2CAT[r.subj])||"其他";
+    const v=(r.dir==="流入"?1:-1)*(Number(r.amt)||0);
+    byCat[c]=(byCat[c]||0)+v;
+    net+=v;
+  });
+  const body=[];
+  CATS.forEach(function(c){
+    const v=Math.round((byCat[c]||0)*100)/100;
+    if(!v) return;
+    body.push({k:c, v:v, type:(v>=0?"p":"n")});
+  });
+  /* 不在 CATS 里的兜底（映射不到分类的计划科目） */
+  Object.keys(byCat).forEach(function(c){
+    if(CATS.indexOf(c)>=0) return;
+    const v=Math.round(byCat[c]*100)/100;
+    if(v) body.push({k:c, v:v, type:(v>=0?"p":"n")});
+  });
+  if(!body.length) return '<div class="note">该月没有已审批的计划明细。</div>';
+  return drawWaterfall(body.concat([{k:"计划净额",v:Math.round(net*100)/100,type:"t"}]));
+}
+
 function hRank(items, opts){
   const rowH=opts.rowH||40, PL=opts.PL||120, PR=opts.PR||118;
   const W=opts.W||600, PT=8;
@@ -827,7 +870,8 @@ function renderP0(){
   const a=agg();
   const boxes=document.getElementById("p0");
   boxes.innerHTML=`
-  <div class="pane-title"><h2>模块〇 · 数据接入</h2><span>先完成这五步，后面的看板才有意义</span></div>
+  <div class="pane-title"><h2>模块一 · 数据接入（内部任务台）</h2><span>先完成这五步，后面的看板才有意义</span></div>
+  <div class="card" style="margin-bottom:14px"><h3>申请记录 <span style="font-weight:400;color:#6B7280;font-size:11.5px">每次导入 / 修改留一条；审批或确认完成后状态自动变「已确认」</span></h3><div id="reqBox1"></div></div>
   <div class="steps" id="steps"></div>
   <div id="stepBody"></div>`;
   renderSteps();
@@ -889,7 +933,6 @@ function dzCard(kind){
       ${(isAct&&S.raw.flow)?`<button class="btn" data-newbatch="1">＋ 重新发起（导入新一批）</button>`:""}
       ${(isAct&&DATA.actMeta&&DATA.actMeta.rows)?`<button class="btn ghost" data-arch="1">✎ 修改已存档流水（本批 ${mBatchRows().length} 笔）</button>`:""}
     </div>
-    ${isAct?'<div style="margin-top:14px"><h3 style="font-size:13px;color:#1F3864;margin:0 0 4px">申请记录 <span style="font-weight:400;color:#6B7280;font-size:11.5px">每次导入 / 修改留一条，点「确认完成」表示这一笔已核对</span></h3><div id="reqBox1"></div></div>':""}
     ${isAct?'<div id="archBox" style="display:none;margin-top:10px"></div>':""}
   </div>`;
 }
@@ -900,6 +943,12 @@ function reqStatusTag(s){
   if(s==="已确认") return '<span class="tag t-ok">已确认</span>';
   if(s==="已作废") return '<span class="tag t-gray">已作废</span>';
   if(s==="进行中") return '<span class="tag t-gray">未确认</span>';
+  /* 资金计划上传链路的状态：已上传（草稿/待审）＝正常；失败、已拦截＝需要重新上传 */
+  if(s==="已上传") return '<span class="tag t-ok">已上传</span>';
+  if(s==="待审") return '<span class="tag t-warn">待审</span>';
+  if(s==="已退回") return '<span class="tag t-bad">已退回</span>';
+  if(s==="失败") return '<span class="tag t-bad">解析失败</span>';
+  if(s==="已拦截") return '<span class="tag t-bad">重复拦截</span>';
   return '<span class="tag t-warn">未确认</span>';
 }
 function reqTable(rows, tag){
@@ -1110,7 +1159,7 @@ function saveArch(i){
     toast2(_msg);
     flushManual("update");
   })
-  .catch(function(){ alert("保存失败：确认数仓服务在运行"); });
+  .catch(function(){ mStat("保存失败：确认数仓服务在运行，稍后自动重试","#C0392B"); try{ scheduleManualRetry(); }catch(e){} });
 }
 
 function step1(){
@@ -1767,8 +1816,29 @@ function mStat(txt,color){
     if(el){ el.textContent=txt; if(color) el.style.color=color; }
   }
 }
+/* 当前数仓里还存在的流水键：用来拦住"已删除月份"的人工标注被浏览器缓存复活 */
+function manualAliveKeys(){
+  const s=new Set();
+  const rows=(S.raw&&S.raw.flow&&S.raw.flow.rows)||[];
+  rows.forEach(function(r){
+    const d=String(r["交易日期"]||r["日期"]||"").trim();
+    const amt=Math.abs(numOf(r["金额"]));
+    const cp=String(r["对方户名"]||r["对方单位"]||"").trim();
+    if(d) s.add(manualKey(d,amt,cp));
+  });
+  return s;
+}
 function flushManual(why){
   saveManual();
+  /* 只推「这批流水还在数仓里」的标注：删库后浏览器本地残存的旧标注不再写回去 */
+  const __alive=manualAliveKeys();
+  if(__alive.size){
+    let _drop=0;
+    Object.keys(__mChanges).forEach(function(k){
+      if(!__alive.has(k)){ delete __mChanges[k]; delete S.manual[k]; _drop++; }
+    });
+    if(_drop) cacheManual();
+  }
   __mDirty=Object.keys(__mChanges).length>0;
   if(!__mDirty) return Promise.resolve({ok:true});
   if(typeof WH==="undefined" || !WH || !WH.on){ mStat("数仓未连接：修改已保留，待重试","#C0392B"); return Promise.resolve({ok:false}); }
@@ -1853,11 +1923,13 @@ function mBatchRows(){
     const bs=all.map(function(r){ return r.batch; }).filter(Boolean).sort();
     bid=bs.length?bs[bs.length-1]:"";
   }
-  if(!bid && !keys) return all;
+  if(!bid && !keys) return all;                 /* 老数据没有批次号：只能全量 */
   const hit=all.filter(function(r){
     return (bid && r.batch===bid) || (keys && keys[r.d+"|"+r.amt+"|"+r.cp]);
   });
-  return hit.length?hit:all;
+  /* 严格只看本批：匹配不到就返回空，绝不回落成全量历史——
+     否则用户会以为自己导入的那批里有历史数据，或者把历史当成刚导进来的。 */
+  return hit;
 }
 /* 人工审核只看「本批」（最近一次导入的批次）；历史流水走「修改已存档流水」逐笔改 */
 function mScopeRows(){ return mBatchRows(); }
@@ -1951,7 +2023,7 @@ function postFlowEdit(rid, patch){
       return c.field+"「"+(c.old||"—")+"」→「"+(c.new||"—")+"」"; }).join("；"));
     flushManual("update");
   })
-  .catch(function(){ alert("保存失败：确认数仓服务 http://127.0.0.1:8765 在运行"); renderManual(); });
+  .catch(function(){ mStat("保存失败：确认数仓服务 http://127.0.0.1:8765 在运行，修改已保留，稍后自动重试","#C0392B"); try{ scheduleManualRetry(); }catch(e){} renderManual(); });
 }
 /* 只把勾选的几笔写回数仓 */
 async function saveSelected(){
@@ -2053,6 +2125,20 @@ function step3(){
   const ALLR=mBatchRows();                 /* 只处理本批（最近一次导入） */
   const ALLTOT=mAllRows().length;          /* 全部存档，仅用于提示 */
   const ALLN=ALLR.length;
+  /* 本批是谁：文件名 + 月份，写在标题下面，避免"我导的 11 月怎么显示 8 月" */
+  const _bid=S.batchId||"";
+  const _bm=((window.__WH_STATS||{}).batches||[]).filter(function(b){ return b.batch===_bid; })[0]||null;
+  const _mons=Array.from(new Set(ALLR.map(function(r){ return r.m; }))).sort();
+  const _batLab=(_bm?_bm.file_name:(_bid||"未知批次")) +
+    (_mons.length?(" · "+_mons.map(function(m){ return String(m).replace(".","-"); }).join("、")):"");
+  if(!ALLN){
+    return `<div class="card">
+      <h3>人工审核 · 本批流水<span>只看本次导入的这批，历史流水不在这里改</span></h3>
+      <div class="banner" style="margin-top:10px"><div><b>本批没有可审核的流水</b>：
+        ${_bid?"批次 <b>"+esc(_bid)+"</b> 在数仓里没有找到行。":"还没有导入过流水。"}
+        请回上一步重新导入（数仓里现有 ${ALLTOT} 笔历史流水，可在导入页用「修改已存档流水」逐笔改）。</div></div>
+      <div style="margin-top:10px"><button class="btn" data-go="1">← 回导入流水</button></div></div>`;
+  }
   const nUn=ALLR.filter(function(r){ return !mState(r).ok; }).length;
   const nOk=ALLR.length-nUn;
   /* 规则全部命中时「未匹配」是空的，别让用户对着一张空表以为没解析：自动切到「全部」 */
@@ -2062,7 +2148,7 @@ function step3(){
     <h3>人工审核 · 本批流水
       <span>只看本次导入的这批；历史流水请在导入页用「修改已存档流水」</span></h3>
     <div class="note" style="margin-top:8px">
-      本批 <b>${ALLN}</b> 笔${ALLTOT!==ALLN?`（全部存档 ${ALLTOT} 笔）`:""}：已匹配 <b>${nOk}</b>，未匹配 <b>${nUn}</b>。
+      <b>本批：${esc(_batLab)}</b> · <b>${ALLN}</b> 笔${ALLTOT!==ALLN?`（全部存档 ${ALLTOT} 笔，不在本页展示）`:""}：已匹配 <b>${nOk}</b>，未匹配 <b>${nUn}</b>。
       ${nUn===0?"规则已全部命中，下面直接列出本批流水，只有科目不合适时才需要改。":""}
       每次改动都会立刻写数仓，不用等提交。</div>
     <div class="filters" style="margin-top:10px;flex-wrap:wrap;gap:8px">
@@ -2214,7 +2300,7 @@ function nextBoard(){
   const btn=document.getElementById("mNextBoard");
   if(btn) btn.disabled=true;
   return commitManual().then(function(d){
-    if(!d || d.ok===false){ alert("保存失败：确认数仓服务 http://127.0.0.1:8765 在运行"); return; }
+    if(!d || d.ok===false){ mStat("保存失败：确认数仓服务 http://127.0.0.1:8765 在运行，稍后自动重试","#C0392B"); try{ scheduleManualRetry(); }catch(e){} return; }
     return archiveBatch().then(function(){
       try{ if(window.renderReqBoxes) renderReqBoxes(); }catch(e){}
       resetFlowIntake();
@@ -2345,6 +2431,69 @@ function step5(){
 }
 
 /* ================= 渲染：管理视角 ================= */
+/* ===== 管理视角 · 资金安全线：页面上直接填，改动即写数仓参数 safe.line ===== */
+let _safeTimer=null, _safeSaved=-1, _safeLoading=false;
+function safeLineTip(t,c){
+  const e=document.getElementById("safeTip");
+  if(e){ e.textContent=t; e.style.color=c||"var(--muted)"; }
+}
+function safeLineSave(v){
+  S.safe=v; P.safe=v;
+  if(typeof WH!=="undefined" && WH.on){
+    safeLineTip("正在保存…","var(--navy)");
+    fetch("/api/params",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({params:{"safe.line":String(v)},actor:"管理视角"})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d && d.ok){
+          _safeSaved=v;
+          safeLineTip("已保存到数仓 · "+new Date().toLocaleTimeString("zh-CN",{hour12:false}),"#2E8B57");
+        }else{
+          safeLineTip("保存失败，本页仍按该值计算","#C0392B");
+        }
+      })
+      .catch(function(){ safeLineTip("保存失败（数仓没连上），本页仍按该值计算","#C0392B"); });
+  }else{
+    _safeSaved=v;
+    safeLineTip("数仓没连上，只在本页生效","#C0392B");
+  }
+}
+function safeLineInit(){
+  const el=document.getElementById("safeInput");
+  if(!el) return;
+  if(!el.dataset.bound){
+    el.dataset.bound="1";
+    el.addEventListener("input",function(){
+      const v=Math.max(0,Math.round(numOf(el.value)));
+      S.safe=v; P.safe=v;
+      clearTimeout(_safeTimer);
+      _safeTimer=setTimeout(function(){ safeLineSave(v); },450);
+      try{ renderP1(); }catch(e){}
+    });
+    el.addEventListener("blur",function(){
+      const v=Math.max(0,Math.round(numOf(el.value)));
+      clearTimeout(_safeTimer);
+      if(v!==_safeSaved) safeLineSave(v);
+    });
+  }
+  if(document.activeElement!==el && (S.safe||0)>0 && String(el.value)!==String(S.safe)) el.value=S.safe;
+  if(!window.__safeLoaded && !_safeLoading) safeLineLoad();
+}
+function safeLineLoad(){
+  _safeLoading=true;
+  fetch("/api/eco",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(d){
+    _safeLoading=false; window.__safeLoaded=1;
+    const p=((d&&d.params)||[]).filter(function(x){ return x.id==="safe.line"; })[0];
+    if(!p) return;
+    const v=Math.round(+p.value||0);
+    S.safe=v; P.safe=v; _safeSaved=v;
+    const el=document.getElementById("safeInput");
+    if(el && document.activeElement!==el) el.value=v;
+    safeLineTip("数仓当前值 "+fmt(v)+" 元 · 改动即保存");
+    try{ renderP1(); }catch(e){}
+  }).catch(function(){ _safeLoading=false; });
+}
+
 function renderP1(){
   /* 全部口径改为「数仓实际流水」：不再用 Q4 计划模型推算，避免没有计划时全是 0 或错数 */
   const rows=DATA.actAll||[];
@@ -2362,45 +2511,61 @@ function renderP1(){
     : "流水里没有「余额」列，取不到当前余额";
   const uncls=novRows.filter(function(x){ return !x[6]; }).length;
 
+  /* —— banner 三块：① 最新月两账户最后一天余额 ② 最新月净流入 ③ 按安全线的缺口预警 —— */
+  const balDet=(DATA.balLatest&&DATA.balLatest.detail)||[];
+  const balMonth=DATA.balLatest?String(DATA.balLatest.month).replace(".","-"):"";
+  const acctTxt=balDet.map(function(d){
+    const day=d.date?String(d.date).slice(5).replace("-","/"):"";
+    return d.acct+" "+fmt(d.bal)+(day?"（"+day+"）":"");
+  }).join(" ＋ ");
+  const safeOn=(S.safe||0)>0;
+  const gap=(isFinite(curBal)&&safeOn)?(curBal-S.safe):NaN;
+
   const k=[
-    {cls:"a",lab:"当前可用资金余额",val:curBal,tone:"bal",hint:balHint},
-    {cls:"b",lab:`${amLab}流入`,val:inAm,tone:"in",
-     hint:`${amLab}实际进账 ${novRows.filter(function(x){return x[2]==="收";}).length} 笔 · 数仓实算`},
-    {cls:"c",lab:`${amLab}流出`,val:outAm,tone:"out",
-     hint:`${amLab}实际出账 ${novRows.filter(function(x){return x[2]==="支";}).length} 笔 · 数仓实算`},
-    {cls:"d",lab:`${amLab}净现金流`,val:netAm,tone:"net",
-     hint:`流入 − 流出 · 共 ${novRows.length} 笔${uncls?`（${uncls} 笔未分类）`:""}`}
+    {cls:"a",lab:"当前可用资金余额",val:curBal,tone:"bal",
+     hint:(balDet.length? acctTxt+" · "+balMonth+" 最后一天余额"
+                       : "流水里没有「余额」列，取不到当前余额")},
+    {cls:"b",lab:`${amLab}净流入`,val:netAm,tone:"net",
+     hint:`流入 ${fmt(inAm)} − 流出 ${fmt(outAm)} · ${novRows.length} 笔${uncls?`（${uncls} 笔未分类）`:""}`},
+    {cls:"c",lab:"资金缺口预警",val:gap,tone:"gap",
+     txt:(!safeOn ? "待设安全线" : (gap<0 ? "缺口 "+fmt(-gap) : "安全垫 "+fmt(gap))),
+     hint:(safeOn ? `安全线 ${fmt(S.safe)} · 可用 ${fmt(curBal)}` : "在上面填安全线，缺口随填随算")}
   ];
   document.getElementById("kpis1").innerHTML=k.map(function(x){
-    const cls = x.tone==="in" ? "red" : (x.tone==="out" ? "green" : (x.val>=0?"red":"green"));
-    const txt = !isFinite(x.val) ? "—" : ((x.tone==="out"?"−":"")+fmt(Math.abs(x.val)));
+    let cls, txt;
+    if(x.tone==="gap"){
+      cls = !safeOn ? "" : (x.val<0 ? "red" : "green");
+      txt = x.txt;
+    }else{
+      cls = (x.tone==="net") ? (x.val>=0?"red":"green") : "";
+      txt = !isFinite(x.val) ? "—" : fmt(x.val);
+    }
     return `<div class="kpi ${x.cls}"><div class="lab">${x.lab}</div>
       <div class="val ${cls}">${txt}</div>
       <div class="hint">${x.hint}</div></div>`;
   }).join("");
 
   const bn=document.getElementById("banner1");
-  const safeOn=(S.safe||0)>0;
   if(!isFinite(curBal)){
     bn.className="banner";
-    bn.innerHTML=`<div><b>余额待补</b>：这批流水没有「余额」列，当前可用资金与安全线无法计算。请在导出流水时勾选余额列。</div>`;
+    bn.innerHTML=`<div><b>余额待补</b>：这批流水没有「余额」列，当前可用资金与缺口预警无法计算。请在导出流水时勾选余额列。</div>`;
   }else if(!safeOn){
     bn.className="banner";
-    bn.innerHTML=`<div><b>${amLab}资金概览</b>：月末余额 <b>${fmt(curBal)} 元</b>，当月净流 ${fmt(netAm)} 元。
-      还没有设置资金安全线，可在「配置 · 业务参数中心」里配置后这里会自动做安全线判断。</div>`;
-  }else if(curBal<S.safe && netAm<0){
+    bn.innerHTML=`<div><b>${amLab}资金概览</b>：月末可用 <b>${fmt(curBal)} 元</b>${acctTxt?`（${acctTxt}）`:""}，
+      当月净流入 <b>${netAm>=0?"+":"−"}${fmt(Math.abs(netAm))} 元</b>。
+      还没有填资金安全线 —— 在上面输入后这里会立刻给出缺口预警。</div>`;
+  }else if(gap<0){
     bn.className="banner bad";
-    bn.innerHTML=`<div><b>资金预警</b>：${amLab}末余额 <b>${fmt(curBal)} 元</b>，已低于安全线 ${fmt(S.safe)} 元；
-      当月净流出 ${fmt(Math.abs(netAm))} 元，缺口 <b>${fmt(S.safe-curBal)} 元</b>。</div>`;
-  }else if(curBal<S.safe){
-    bn.className="banner";
-    bn.innerHTML=`<div><b>安全线预警</b>：${amLab}末余额 ${fmt(curBal)} 元，低于安全线 ${fmt(S.safe)} 元，缺口 ${fmt(S.safe-curBal)} 元；
-      当月净流 ${fmt(netAm)} 元。</div>`;
+    bn.innerHTML=`<div><b>资金缺口预警</b>：${amLab}月末可用 <b>${fmt(curBal)} 元</b>${acctTxt?`（${acctTxt}）`:""}
+      低于安全线 ${fmt(S.safe)} 元，缺口 <b>${fmt(-gap)} 元</b>；
+      当月净流入 ${netAm>=0?"+":"−"}${fmt(Math.abs(netAm))} 元${netAm<0?"（还在净流出，缺口会继续扩大）":""}。</div>`;
   }else{
     bn.className="banner ok";
-    bn.innerHTML=`<div><b>资金安全</b>：${amLab}末余额 ${fmt(curBal)} 元，高于安全线 ${fmt(S.safe)} 元；
-      当月净流 ${fmt(netAm)} 元。</div>`;
+    bn.innerHTML=`<div><b>资金安全</b>：${amLab}月末可用 <b>${fmt(curBal)} 元</b>${acctTxt?`（${acctTxt}）`:""}
+      高于安全线 ${fmt(S.safe)} 元，安全垫 <b>${fmt(gap)} 元</b>；
+      当月净流入 ${netAm>=0?"+":"−"}${fmt(Math.abs(netAm))} 元。</div>`;
   }
+  safeLineInit();
 
   /* 月度余额走势：只用实际月末余额，没有的点留空 */
   const pts=ACTM.map(function(m,i){ return {lab:ACTL[m]||m, bal:DATA.balHist[i], kind:"act"}; })
@@ -2415,25 +2580,58 @@ function renderP1(){
     ? waterChart(pts, S.safe)
     : '<div class="note">流水里没有「余额」列，画不出余额走势；导入时保留余额列即可。</div>';
 
-  /* 瀑布：月份只列有实际数据的月份，首次进入默认落在最新月 */
+  /* 瀑布：实际月 + 已审批计划月（如 2026-12）；计划月按计划口径画 */
+  const wfPlanM=(function(){
+    const s={};
+    (DATA.plan||[]).forEach(function(r){
+      const m=String(r.month||"").replace(".","-").slice(0,7);
+      if(/^20\d{2}-\d{2}$/.test(m)) s[m]=1;
+    });
+    return Object.keys(s).filter(function(m){ return ACTM.indexOf(m.replace("-","."))<0; }).sort();
+  })();
+  const wfAll=ACTM.concat(wfPlanM);
   if(S.__wfInit!==1){ S.wfMonth=ACTM.length?ACTM.length-1:0; S.__wfInit=1; }
-  if(S.wfMonth>=ACTM.length) S.wfMonth=ACTM.length-1;
+  if(S.wfMonth>=wfAll.length) S.wfMonth=wfAll.length-1;
   if(S.wfMonth<0) S.wfMonth=0;
-  const wfM=ACTM[S.wfMonth]||am;
-  document.getElementById("wflab").textContent=(ACTL[wfM]||wfM)+" · 实际口径";
+  const wfM=wfAll[S.wfMonth]||am;
+  const wfIsPlan=S.wfMonth>=ACTM.length;
+  document.getElementById("wflab").textContent=
+    (wfIsPlan?(MLAB[wfM]||(parseInt(String(wfM).slice(5),10)+"月")):(ACTL[wfM]||wfM))
+    +(wfIsPlan?" · 计划口径（已审批资金计划）":" · 实际口径");
   document.getElementById("wfmonth").innerHTML=
-    ACTM.map((m,i)=>`<button class="chip ${i===S.wfMonth?"on":""}" data-wf="${i}">${ACTL[m]||m}</button>`).join("");
-  document.getElementById("waterfall").innerHTML=waterfallAct(wfM);
+    wfAll.map((m,i)=>{
+      const isP=i>=ACTM.length;
+      const lab=isP?(MLAB[m]||(parseInt(String(m).slice(5),10)+"月")):(ACTL[m]||m);
+      return `<button class="chip ${i===S.wfMonth?"on":""}" data-wf="${i}">${lab}${isP?"（计划）":""}</button>`;
+    }).join("");
+  document.getElementById("waterfall").innerHTML=wfIsPlan?waterfallPlan(wfM):waterfallAct(wfM);
 
-  /* 收支结构（按分类）：流入 / 流出 / 净额 / 笔数 */
+  /* 收支结构（按分类）：流入 / 流出 / 净额 / 笔数；计划月按已审批计划明细统计 */
   let sIn=0,sOut=0,sN=0;
-  const struct=CATS.map(function(c){
-    const ci=catIn(c,wfM), co=catOut(c,wfM);
-    const n=rows.filter(function(x){ return String(x[1]||"").slice(0,7)===String(wfM).replace(".","-") && x[8]===c; }).length;
-    sIn+=ci; sOut+=co; sN+=n;
-    return {c:c,in:ci,out:co,net:ci-co,n:n};
-  }).filter(function(x){ return x.in||x.out; });
-  const nonOp=(DATA.actNet&&DATA.actNet[wfM]!=null?DATA.actNet[wfM]:0)-(sIn-sOut);
+  let struct, nonOp;
+  if(wfIsPlan){
+    const byC={};
+    (DATA.plan||[]).filter(function(r){ return String(r.month||"").replace(".","-").slice(0,7)===String(wfM).replace(".","-").slice(0,7); })
+      .forEach(function(r){
+        const c=(typeof PLAN2CAT!=="undefined"&&PLAN2CAT[r.subj])||"其他";
+        const o=byC[c]||(byC[c]={c:c,in:0,out:0,n:0});
+        if(r.dir==="流入") o.in+=Number(r.amt)||0; else o.out+=Number(r.amt)||0;
+        o.n++;
+      });
+    struct=Object.keys(byC).map(function(k){
+      const x=byC[k]; sIn+=x.in; sOut+=x.out; sN+=x.n;
+      return {c:x.c,in:x.in,out:x.out,net:x.in-x.out,n:x.n};
+    });
+    nonOp=0;
+  }else{
+    struct=CATS.map(function(c){
+      const ci=catIn(c,wfM), co=catOut(c,wfM);
+      const n=rows.filter(function(x){ return String(x[1]||"").slice(0,7)===String(wfM).replace(".","-") && x[8]===c; }).length;
+      sIn+=ci; sOut+=co; sN+=n;
+      return {c:c,in:ci,out:co,net:ci-co,n:n};
+    }).filter(function(x){ return x.in||x.out; });
+    nonOp=(DATA.actNet&&DATA.actNet[wfM]!=null?DATA.actNet[wfM]:0)-(sIn-sOut);
+  }
   document.getElementById("act3").innerHTML=`
     <table><thead><tr><th style="text-align:left">收支分类</th><th>流入</th><th>流出</th><th>净额</th><th>笔数</th></tr></thead>
     <tbody>${struct.map(function(x){ return `<tr>
@@ -2448,7 +2646,9 @@ function renderP1(){
     </tbody>
     <tfoot><tr><td>合计</td><td class="red">${fmt(sIn)}</td><td class="green">${fmt(sOut)}</td>
       <td class="${sIn-sOut>=0?'red':'green'}">${fmt(sIn-sOut)}</td><td>${sN}</td></tr></tfoot></table>
-    <div class="note">${ACTL[wfM]||wfM} 的实际收支结构，分类来自打标结果；「投资 / 内部划转 / 未分类」是净额兜底项，用于和余额勾稽。</div>`;
+    <div class="note">${wfIsPlan
+      ? (MLAB[wfM]||wfM)+" 的<b>计划</b>收支结构，来自已审批资金计划明细，科目按映射归类到收支分类；该月流水导入后自动切回实际口径。"
+      : (ACTL[wfM]||wfM)+" 的实际收支结构，分类来自打标结果；「投资 / 内部划转 / 未分类」是净额兜底项，用于和余额勾稽。"}</div>`;
 
   /* 月度资金滚动表 */
   const gapRows=ACTM.map(function(m,i){
@@ -2512,44 +2712,55 @@ function renderP2(){
   const _pmSel=document.getElementById("penMonth");
   if(_pmSel){
     const _cur=_pmSel.value||S.penMonth||"all";
-    const _opts='<option value="all">全部月份</option>'+ACTM.map(function(m){ return `<option value="${m}">${ACTL[m]||m}</option>`; }).join("");
+    /* 月份下拉同时列「实际月」与「计划月」：只有实际月时，12 月计划在穿透表里选不出来 */
+    const _pmonths=ACTM.concat(MONTHS.filter(function(m){ return ACTM.indexOf(m)<0; }));
+    const _opts='<option value="all">全部月份</option>'+_pmonths.map(function(m){
+      return `<option value="${m}">${ACTL[m]||MLAB[m]||m}${ACTM.indexOf(m)<0?"（计划）":""}</option>`;
+    }).join("");
     if(_pmSel.dataset.sig!==_opts){ _pmSel.innerHTML=_opts; _pmSel.dataset.sig=_opts; }
-    _pmSel.value=(_cur==="all"||ACTM.indexOf(_cur)>=0)?_cur:"all";
+    _pmSel.value=(_cur==="all"||_pmonths.indexOf(_cur)>=0)?_cur:"all";
     S.penMonth=_pmSel.value;
   }
   const _pdSel=document.getElementById("penDir");
   if(_pdSel) _pdSel.value=S.penDir||"all";
-  const pm=S.penMonth||"all", pd=S.penDir||"all";
+  let pm=S.penMonth||"all", pd=S.penDir||"all";
+  /* 选中计划月（如 12 月，还没有流水）时自动切到「计划底仓」，否则穿透表永远是空的 */
+  if(pm!=="all" && ACTM.indexOf(pm)<0 && S.penSrc!=="plan"){
+    S.penSrc="plan";
+    try{ const _ps=document.getElementById("penSrc"); if(_ps) _ps.value="plan"; }catch(e0){}
+  }
   const thr=S.thr*10000;
   let rows=[];
   if(S.penSrc==="act"){
     rows=DATA.actBig.filter(r=>(cat==="全部"?true:r.cat===cat)&&r.amt>=thr
         &&(pm==="all"||r.m===pm)&&(pd==="all"||r.dir===pd)).sort((x,y)=>y.amt-x.amt);
     document.getElementById("penTable").innerHTML=`
-      <thead><tr><th>日期</th><th>方向</th><th style="text-align:left">对方户名</th><th style="text-align:left">科目</th><th>金额</th></tr></thead>
+      <thead><tr><th>日期</th><th>方向</th><th>分类</th><th style="text-align:left">对方户名</th><th style="text-align:left">科目</th><th>金额</th></tr></thead>
       <tbody>${rows.map(r=>`<tr>
-        <td>${r.d}</td><td><span class="tag ${r.dir==='收'?'t-in':'t-out'}">${r.dir}</span></td><td style="text-align:left;max-width:210px;overflow:hidden;text-overflow:ellipsis">${r.cp||"—"}</td>
+        <td>${r.d}</td><td><span class="tag ${r.dir==='收'?'t-in':'t-out'}">${r.dir}</span></td>
+        <td><span class="tag" style="background:#EEF2F8;color:#33415C">${r.cat||"其他"}</span></td>
+        <td style="text-align:left;max-width:210px;overflow:hidden;text-overflow:ellipsis">${r.cp||"—"}</td>
         <td style="text-align:left;color:#6B7280">${r.k1}${r.k2?"/"+r.k2:""}</td>
-        <td class="${r.dir==="收"?"red":"green"}">${fmt(r.amt)}</td></tr>`).join("")||'<tr><td colspan="5" style="color:#9CA3AF;padding:14px">当前分类 / 阈值下没有命中流水，换个分类或把阈值拉到 0</td></tr>'}</tbody>
+        <td class="${r.dir==="收"?"red":"green"}">${fmt(r.amt)}</td></tr>`).join("")||'<tr><td colspan="6" style="color:#9CA3AF;padding:14px">当前分类 / 阈值下没有命中流水，换个分类或把阈值拉到 0</td></tr>'}</tbody>
       <tfoot>${(()=>{const ri=rows.filter(r=>r.dir==="收"),ro=rows.filter(r=>r.dir!=="收");
         const si=ri.reduce((s,r)=>s+r.amt,0),so=ro.reduce((s,r)=>s+r.amt,0);
-        return `<tr><td colspan="4">收入 ${ri.length} 笔</td><td class="red">${fmt(si)}</td></tr>
-        <tr><td colspan="4">支出 ${ro.length} 笔（同科目下的退款/冲回）</td><td class="green">${fmt(so)}</td></tr>
-        <tr><td colspan="4">净额 ${rows.length} 笔</td><td>${fmt(si-so)}</td></tr>`;})()}</tfoot>`;
+        return `<tr><td colspan="5">收入 ${ri.length} 笔</td><td class="red">${fmt(si)}</td></tr>
+        <tr><td colspan="5">支出 ${ro.length} 笔（同科目下的退款/冲回）</td><td class="green">${fmt(so)}</td></tr>
+        <tr><td colspan="5">净额 ${rows.length} 笔</td><td>${fmt(si-so)}</td></tr>`;})()}</tfoot>`;
   }else{
     rows=effRows().filter(r=>r.amt>=thr&&(cat==="全部"||PLAN2CAT[r.subj]===cat)
         &&(pm==="all"||r.month===pm.replace(".","-"))
         &&(pd==="all"||(pd==="收"&&r.dir==="流入")||(pd==="支"&&r.dir==="流出")));
     document.getElementById("penTable").innerHTML=`
       <thead><tr><th>月份</th><th>科目</th><th>来源表</th><th>金额</th></tr></thead>
-      <tbody>${rows.map(r=>`<tr><td>${r.month}</td>
+      <tbody>${rows.map(r=>`<tr><td>${MLAB[r.month]||r.month}</td>
         <td style="text-align:left">${r.subj}</td>
         <td style="text-align:left;color:#6B7280;font-size:11px">${r.src||"—"}</td>
         <td class="${r.dir==="流入"?"red":"green"}">${fmt(r.amt)}</td></tr>`).join("")}</tbody>
       <tfoot><tr><td colspan="3">命中 ${rows.length} 行</td><td>${fmt(rows.reduce((s,r)=>s+r.amt,0))}</td></tr></tfoot>`;
   }
   document.getElementById("penCount").textContent=
-    `${S.penSrc==="act"?"实际流水":"计划底仓"} · ${pm==="all"?"全部月份":(ACTL[pm]||pm)} · `+
+    `${S.penSrc==="act"?"实际流水":"计划底仓"} · ${pm==="all"?"全部月份":(ACTL[pm]||MLAB[pm]||pm)} · `+
     `${pd==="all"?"收+支":(pd==="收"?"只看收入":"只看支出")} · ${(+S.thr>0)?"≥"+S.thr+"万":"全部金额"} · 命中 ${rows.length} 条`;
 }
 
@@ -2557,10 +2768,14 @@ function renderP2(){
 function renderP3(){
   const isPlan=S.dSrc==="plan";
   const mSel=document.getElementById("dMonth"), cSel=document.getElementById("dCat");
-  const months=isPlan?MONTHS:ACTM;
+  /* 计划口径的月份以「已上传计划」为准，不能只用推算的 MONTHS，否则个别期间选不出来 */
+  const planMonths=[].concat(MONTHS, (DATA.plan||[]).map(r=>r.month))
+    .filter(function(v,i,a){ return v && a.indexOf(v)===i; }).sort();
+  const months=isPlan?planMonths:ACTM;
   mSel.innerHTML=`<option value="all">全部月份</option>`+months.map(m=>`<option value="${m}">${isPlan?m:ACTL[m]}</option>`).join("");
   const cats=isPlan?[...new Set(DATA.plan.map(r=>r.subj))]:CATS;
   cSel.innerHTML=`<option value="all">全部科目/分类</option>`+cats.map(c=>`<option>${c}</option>`).join("");
+  if(months.indexOf(S.dMonth)<0) S.dMonth="all";
   mSel.value=S.dMonth; cSel.value=S.dCat;
   const dirSel=document.getElementById("dDir"), minSel=document.getElementById("dMin");
   if(dirSel) dirSel.value=S.dDir||"all";
@@ -2614,83 +2829,206 @@ function renderP3(){
 }
 
 /* ================= 渲染：预实 ================= */
-function renderP4(){
-  const a=agg(), c=DATA.cov;
-  const p1=c.total?c.可映射/c.total*100:0,p2=c.total?c.部分可映射/c.total*100:0,p3=c.total?c.无对应/c.total*100:0;
-  document.getElementById("covMini").innerHTML=`
-    <div style="display:flex;gap:14px;align-items:center">
-      <div style="flex:0 0 150px">${donutSeg([
-        {v:c.可映射,c:"#2E8B57"},{v:c.部分可映射,c:"#D97706"},{v:c.无对应,c:"#C0392B"}],c.total)}</div>
-      <div style="flex:1">
-        ${[["可映射","#2E8B57",p1],["部分可映射","#D97706",p2],["无对应","#C0392B",p3]].map(x=>`
-          <div style="display:flex;align-items:center;gap:8px;margin:7px 0;font-size:12px">
-            <i style="width:9px;height:9px;border-radius:2px;background:${x[1]};flex:0 0 9px"></i>
-            <span style="flex:1;color:#374151">${x[0]}</span>
-            <b>${x[2].toFixed(1)}%</b></div>`).join("")}
-        <div style="font-size:11px;color:#9CA3AF;margin-top:8px">分母＝Q3 经营活动流入流出合计 ${fmt(c.total)} 元</div>
-      </div>
-    </div>
-    <div class="note">映射覆盖率取决于当前流水分类与科目桥接；请结合期间、主体和客户核对。</div>`;
-
-  // 客户口径断裂
-  document.getElementById("custGap").innerHTML=`
-    <table><thead><tr><th>计划侧 KA 客户</th><th>Q4 计划金额</th><th>Q3 流水命中</th></tr></thead>
-    <tbody>${DATA.kaCheck.map(k=>`<tr><td style="text-align:left">${k.n}</td>
-      <td>${fmt(k.plan)}</td>
-      <td class="${k.hit>0?'':'amber'}">${k.hit?fmt(k.hit)+" 元":'<span class="tag t-bad">零命中</span>'}</td></tr>`).join("")}</tbody>
-    <tfoot><tr><td>合计</td><td>${fmt(DATA.kaCheck.reduce((s,k)=>s+k.plan,0))}</td>
-      <td>${fmt(DATA.kaCheck.reduce((s,k)=>s+k.hit,0))}</td></tr></tfoot></table>
-    <div class="note">计划 KA 收入 ${wan(DATA.kaPlan)} 万，但流水里所选客户对应期间仅回 <b>${wan(DATA.kaCheck.reduce((s,k)=>s+k.hit,0))} 万</b>。
-      实际回款主体与计划客户名称需要逐户核对——
-      未提供客户比对输入时此表为空；跨期间比对请使用「预实比对·生态」。</div>`;
-
-  // 偏差率排行
-  const cmp=[
-    {k:"销售收款",act:actCatSum("销售收款")/3,plan:planCatSum(a,"销售收款")/3},
-    {k:"采购付款",act:actCatSum("采购付款")/3,plan:planCatSum(a,"采购付款")/3},
-    {k:"人力费",act:actCatSum("人力费")/3,plan:planCatSum(a,"人力费")/3},
-    {k:"市场费",act:actCatSum("市场费")/3,plan:planCatSum(a,"市场费")/3},
-    {k:"税费",act:actCatSum("税费")/3,plan:planCatSum(a,"税费")/3},
-    {k:"货款退款",act:actCatSum("货款退款")/3,plan:0},
-    {k:"其他",act:actCatSum("其他")/3,plan:0}
-  ].map(x=>({k:x.k,a:x.act,b:x.plan}));
-  document.getElementById("paRank").innerHTML=hRank(cmp,{dual:true,W:1180,PL:110,PR:150,rowH:42});
-
-  // by 科目
-  const subjCmp=cmp.map(x=>({k:x.k,v:Math.abs(x.b-x.a)}));
-  document.getElementById("paSubj").innerHTML=groupBars(cmp.map(x=>x.k),[
-    {name:"Q3 实际月均",color:"#9CA3AF",data:cmp.map(x=>x.a)},
-    {name:"Q4 计划月均",color:"#1F3864",data:cmp.map(x=>x.b)}
-  ],{W:600,H:280});
-
-  // 归因
-  const caliber=[], needExp=[], good=[], unplanned=[];
-  cmp.forEach(x=>{
-    const d=x.a===0?0:(x.b-x.a)/x.a;
-    if(x.k==="销售收款"){
-      caliber.push(`<b>销售收款</b>：计划 ${wan(x.b)} 万/月 vs 实际 ${wan(x.a)} 万/月（${(d*100).toFixed(0)}%）。`+
-        `主因是<b>渠道覆盖不同</b>——计划仅含 KA，实际为全渠道回款，不代表业务下滑。`);
-      return;
-    }
-    if(x.k==="货款退款"||x.k==="其他"){
-      if(x.b===0&&x.a>0) unplanned.push(`<b>${x.k}</b>：Q3 实际 ${wan(x.a)} 万/月，Q4 计划<b>未列示</b>该科目`);
-      return;
-    }
-    if(x.a===0&&x.b>0){ needExp.push(`<b>${x.k}</b>：Q3 实际为 0，Q4 计划 ${wan(x.b)} 万/月，属新增项，需确认依据`); return; }
-    if(d>0.5) needExp.push(`<b>${x.k}</b>：计划比实际高 ${(d*100).toFixed(0)}%（计划 ${wan(x.b)} 万 vs 实际 ${wan(x.a)} 万），可能低估该支出`);
-    else if(d<-0.5) good.push(`<b>${x.k}</b>：计划 ${wan(x.b)} 万 vs 实际 ${wan(x.a)} 万（低 ${(-d*100).toFixed(0)}%）。若确为降本则改善现金；若为计划漏项则低估支出，需业务确认`);
+/* ================= 渲染：预实分析（实际 vs 已锁定预算） ================= */
+function paMonth(m){
+  const s=String(m||"").trim();
+  const x=s.match(/(\d{4})[-/.年](\d{1,2})/);
+  return x?(x[1]+"."+String(+x[2]).padStart(2,"0")):"";
+}
+function paQuarterMonths(q){
+  const y=q.slice(0,4), n=+q.slice(5,6);
+  return [1,2,3].map(function(i){ return y+"."+String((n-1)*3+i).padStart(2,"0"); });
+}
+function paPlanByCat(){
+  /* 已锁定的资金计划（DATA.plan）→ 收支分类 × 月
+     字段来源有两套：审核通过的计划用 amt，dwd_plan 原始行用 amount，两个都认 */
+  const out={};
+  (DATA.plan||[]).forEach(function(r){
+    const m=paMonth(r.month); if(!m) return;
+    const subj=String(r.subj||r.subject||"").trim();
+    const cat=(typeof PLAN2CAT!=="undefined"&&PLAN2CAT[subj])
+              || ((r.cat&&r.cat!=="经营活动")?r.cat:"") || "其他";
+    const amt=Math.abs(+(r.amt!=null?r.amt:r.amount)||0); if(!amt) return;
+    (out[cat]=out[cat]||{});
+    out[cat][m]=(out[cat][m]||0)+amt;
   });
-  const li=(arr,c)=>arr.map(t=>`<li style="padding-left:14px;position:relative"><i style="position:absolute;left:0;color:${c}">·</i>${t}</li>`).join("")||"<li style='color:#9CA3AF'>无</li>";
-  document.getElementById("attr").innerHTML=`
-    <div style="font-size:11.5px;color:#5B6B85;font-weight:700;margin:6px 0 4px">① 口径性差异（不是业务问题）</div>
-    <ul style="list-style:none;font-size:12px;line-height:1.8;color:#374151">${li(caliber,"#5B6B85")}</ul>
-    <div style="font-size:11.5px;color:#C0392B;font-weight:700;margin:12px 0 4px">② 需要业务解释</div>
-    <ul style="list-style:none;font-size:12px;line-height:1.8;color:#374151">${li(needExp,"#C0392B")}</ul>
-    <div style="font-size:11.5px;color:#D97706;font-weight:700;margin:12px 0 4px">③ 计划未列示、实际有发生</div>
-    <ul style="list-style:none;font-size:12px;line-height:1.8;color:#374151">${li(unplanned,"#D97706")}</ul>
-    <div style="font-size:11.5px;color:#2E8B57;font-weight:700;margin:12px 0 4px">④ 计划低于实绩的支出项（需确认可实现性）</div>
-    <ul style="list-style:none;font-size:12px;line-height:1.8;color:#374151">${li(good,"#2E8B57")}</ul>
-    <div class="note">规则判断阈值：差异率 >50% 或实际为 0。真实归因需业务书面解释，对应需求文档步骤 5 的异常处理链路。</div>`;
+  return out;
+}
+function renderP4(){
+  const planC=paPlanByCat(), actC=DATA.actCat||{};
+  const actMonths=[...new Set(Object.keys(actC).reduce(function(a,c){ return a.concat(Object.keys(actC[c]||{})); },[]))].sort();
+  const planMonths=[...new Set(Object.keys(planC).reduce(function(a,c){ return a.concat(Object.keys(planC[c]||{})); },[]))].sort();
+  const months=[...new Set(actMonths.concat(planMonths))].sort();
+  const hasPlan=planMonths.length>0;
+  /* 同口径才可比：计划只覆盖 12 月、实际只有 7/8/11 月时，把两边总额直接相减会得出
+     一千多个百分点的假偏差。所以有重叠月份就按重叠期间比，没有就明确说"同期不可比"。 */
+  const bothMonths=months.filter(function(m){ return planMonths.indexOf(m)>=0 && actMonths.indexOf(m)>=0; });
+  const samePeriod=bothMonths.length>0;
+  const cmpMonths=samePeriod?bothMonths:months;
+  const scopeLab=(!months.length?"还没有数据"
+    :(hasPlan
+       ? (samePeriod
+          ? ("同期可比期间："+cmpMonths.map(function(m){ return m.replace(".","-"); }).join("、"))
+          : ("无同期可比：计划 "+planMonths.map(function(m){ return m.replace(".","-"); }).join("、")
+             +" / 实际 "+actMonths.map(function(m){ return m.replace(".","-"); }).join("、")))
+       : ("期间："+months.map(function(m){ return m.replace(".","-"); }).join("、")+"（仅实际）")));
+
+  const rows=(typeof CATS!=="undefined"?CATS:[]).map(function(c){
+    const p=cmpMonths.reduce(function(s,m){ return s+((planC[c]&&planC[c][m])||0); },0);
+    const a=cmpMonths.reduce(function(s,m){ return s+((actC[c]&&actC[c][m])||0); },0);
+    return {cat:c,plan:p,act:a,diff:a-p,rate:p?(a-p)/p:null};
+  });
+  const tPlan=rows.reduce(function(s,r){ return s+r.plan; },0);
+  const tAct=rows.reduce(function(s,r){ return s+r.act; },0);
+  const rateAll=tPlan?(tAct-tPlan)/tPlan:null;
+  const absSum=rows.reduce(function(s,r){ return s+Math.abs(r.diff); },0);
+  const top=rows.slice().sort(function(x,y){ return Math.abs(y.diff)-Math.abs(x.diff); })[0];
+  const topShare=(top&&absSum)?Math.abs(top.diff)/absSum:0;
+  const cov=DATA.cov||{total:0};
+  const matchRate=cov.total?(cov.可映射+cov.部分可映射)/cov.total:null;
+  const gapOnly=rows.filter(function(r){ return r.plan>0&&r.act===0; });
+  const actOnly=rows.filter(function(r){ return r.act>0&&r.plan===0; });
+  const pctTxt=function(v){ return v===null?"—":((v>=0?"+":"−")+Math.abs(v*100).toFixed(1)+"%"); };
+
+  /* —— 三块 KPI：偏差率 / 口径匹配率 / 偏差主要来源 —— */
+  const k=[
+    {cls:"a",lab:"实际 vs 预算偏差率",tone:"rate",
+     txt:(!hasPlan?"待上传计划":(samePeriod?pctTxt(rateAll):"同期不可比")),
+     hint:(!hasPlan?"计划侧为空，下面只列实际口径"
+           :(samePeriod?("同期 "+cmpMonths.map(function(m){ return m.replace(".","-"); }).join("、")
+                         +" · 预算 "+fmt(tPlan)+" · 实际 "+fmt(tAct)
+                         +" · 差异 "+(tAct-tPlan>=0?"+":"−")+fmt(Math.abs(tAct-tPlan)))
+             :("计划只有 "+planMonths.map(function(m){ return m.replace(".","-"); }).join("、")
+               +"，该期间还没有实际流水；两者期间不重叠，不能直接算偏差率")))},
+    {cls:"b",lab:"口径匹配率",tone:"match",
+     txt:(matchRate===null?"—":(matchRate*100).toFixed(1)+"%"),
+     hint:(cov.total?("可映射 "+fmt(cov.可映射)+" ＋ 部分可映射 "+fmt(cov.部分可映射)+" ／ 分母 "+fmt(cov.total)):"还没有可比较的流水")},
+    {cls:"c",lab:"偏差主要来自",tone:"top",
+     txt:(!hasPlan?"—":(!samePeriod?"同期不足":((top&&Math.abs(top.diff)>0)?top.cat:"基本一致"))),
+     hint:(!hasPlan?"需要先有预算口径"
+           :(!samePeriod?"计划与实际没有重叠月份，先不用它判断偏差来源"
+             :((top&&Math.abs(top.diff)>0)
+               ?("占绝对偏差 "+(topShare*100).toFixed(0)+"% · "+(top.diff>0?"实际超预算":"实际低于预算")+" "+fmt(Math.abs(top.diff)))
+               :"预算与实际基本吻合")))}
+  ];
+  document.getElementById("paKpis").innerHTML=k.map(function(x){
+    let cls="", txt=x.txt;
+    if(x.tone==="rate"){ cls=(!hasPlan||x.txt==="—")?"":(rateAll>0?"red":"green"); }
+    else if(x.tone==="match"){ cls=(matchRate!==null&&matchRate<0.9)?"amber":"green"; }
+    else { cls=(!hasPlan)?"":((top&&top.diff>0)?"red":"green"); }
+    if(x.tone==="match"&&matchRate===null) cls="";
+    return `<div class="kpi ${x.cls}"><div class="lab">${x.lab}</div>
+      <div class="val ${cls}">${txt}</div>
+      <div class="hint">${x.hint}</div></div>`;
+  }).join("");
+
+  /* —— banner —— */
+  const bn=document.getElementById("paBanner");
+  if(!hasPlan){
+    bn.className="banner";
+    bn.innerHTML=`<div><b>计划侧为空</b>：还没有已锁定的资金预算，偏差率与完成率算不出来。
+      到「模块一 · 资金计划」上传并审核通过后，这里会自动切到预算口径。
+      当前只有实际：${months.length} 个月、合计 <b>${fmt(tAct)} 元</b>。
+      ${matchRate!==null?("口径匹配率 <b>"+(matchRate*100).toFixed(1)+"%</b>（未对上 "+(gapOnly.length+actOnly.length)+" 类）。"):""}</div>`;
+  }else if(!samePeriod){
+    bn.className="banner";
+    bn.innerHTML=`<div><b>期间不重叠，暂不可比</b>：计划只有 ${planMonths.map(function(m){ return m.replace(".","-"); }).join("、")}，
+      实际流水在 ${actMonths.map(function(m){ return m.replace(".","-"); }).join("、")}。
+      同期没有共同月份时不做偏差率判断（否则会出现几百上千个百分点的假偏差）。
+      把该月流水导进来，或补齐计划期间后这里会自动转成同期比较。</div>`;
+  }else if(rateAll!==null&&Math.abs(rateAll)>=0.1){
+    bn.className="banner bad";
+    bn.innerHTML=`<div><b>偏差${rateAll>0?"超预算":"低于预算"} ${Math.abs(rateAll*100).toFixed(1)}%</b>：
+      预算 ${fmt(tPlan)} 元，实际 ${fmt(tAct)} 元，差异 <b>${rateAll>0?"+":"−"}${fmt(Math.abs(tAct-tPlan))} 元</b>。
+      主要来自 <b>${top?top.cat:"—"}</b>（${(topShare*100).toFixed(0)}%）；口径匹配率 ${matchRate===null?"—":(matchRate*100).toFixed(1)+"%"}
+      ${(gapOnly.length+actOnly.length)?("，<b>"+(gapOnly.length+actOnly.length)+" 类口径没对上</b>（见右下清单）"):""}。</div>`;
+  }else{
+    bn.className="banner ok";
+    bn.innerHTML=`<div><b>预算执行基本贴合</b>：预算 ${fmt(tPlan)} 元，实际 ${fmt(tAct)} 元，偏差 ${rateAll===null?"—":pctTxt(rateAll)}。
+      口径匹配率 ${matchRate===null?"—":(matchRate*100).toFixed(1)+"%"}${(gapOnly.length+actOnly.length)?("，仍有 "+(gapOnly.length+actOnly.length)+" 类没对上"):""}。</div>`;
+  }
+
+  /* —— 按分类偏差表 —— */
+  document.getElementById("paScope").textContent=scopeLab;
+  const maxAbs=Math.max.apply(null,rows.map(function(r){ return Math.abs(r.diff); }).concat([1]));
+  document.getElementById("paCatTbl").innerHTML=`
+    <thead><tr><th style="text-align:left">收支分类</th><th>预算</th><th>实际</th><th>偏差额</th><th>偏差率</th><th>完成率</th><th style="text-align:left;min-width:120px">偏差分布</th></tr></thead>
+    <tbody>${rows.map(function(r){
+      const rate=(!samePeriod||r.rate===null)?"—":pctTxt(r.rate);
+      const done=(!samePeriod||!r.plan)?"—":((r.act/r.plan)*100).toFixed(0)+"%";
+      const w=Math.max(3,Math.round(Math.abs(r.diff)/maxAbs*100));
+      const col=r.diff>0?"#C0392B":"#2E8B57";
+      const tag=(r.plan>0&&r.act===0)?'<span class="tag t-warn">预算有·实际无</span>'
+              :((r.act>0&&r.plan===0)?'<span class="tag t-bad">实际有·预算无</span>':"");
+      return `<tr><td style="text-align:left"><b>${r.cat}</b> ${tag}</td>
+        <td>${r.plan?fmt(r.plan):"—"}</td>
+        <td>${r.act?fmt(r.act):"—"}</td>
+        <td class="${r.diff>0?'red':(r.diff<0?'green':'')}">${r.diff?((r.diff>0?"+":"−")+fmt(Math.abs(r.diff))):"—"}</td>
+        <td class="${r.rate===null?'':(r.rate>0?'red':'green')}">${rate}</td>
+        <td>${done}</td>
+        <td style="text-align:left"><i style="display:block;height:7px;border-radius:4px;background:${col};width:${w}%"></i></td></tr>`;
+    }).join("")}</tbody>
+    <tfoot><tr><td>合计</td><td>${fmt(tPlan)}</td><td>${fmt(tAct)}</td>
+      <td class="${tAct-tPlan>=0?'red':'green'}">${tAct-tPlan?((tAct-tPlan>0?"+":"−")+fmt(Math.abs(tAct-tPlan))):"—"}</td>
+      <td>${(!samePeriod||rateAll===null)?"—":pctTxt(rateAll)}</td>
+      <td>${(!samePeriod||!tPlan)?"—":((tAct/tPlan)*100).toFixed(0)+"%"}</td><td></td></tr></tfoot>`;
+  document.getElementById("paCatNote").innerHTML=
+    `偏差率＝（实际−预算）÷预算，正数＝实际超预算。<b>完成率＝实际÷预算</b>，只对预算侧有数的类目计算。
+     预算按已锁定资金计划的科目经科目映射归到 7 大收支分类，未识别科目计入「其他」。
+     ${samePeriod?"":"<b>当前计划与实际没有重叠月份，偏差率与完成率不计算</b>，上表只作预算/实际的并列参考。"}`;
+
+  /* —— 按月 / 按季 —— */
+  const gran=S.paGran||"m";
+  document.querySelectorAll("[data-pag]").forEach(function(b){
+    b.classList.toggle("on",b.dataset.pag===gran);
+  });
+  document.getElementById("paGranLab").textContent=(gran==="q"?"按季度汇总":"按自然月");
+  let perRows=[], note="";
+  if(gran==="m"){
+    perRows=months.map(function(m){
+      const p=rows.reduce(function(s,r){ return s+((planC[r.cat]&&planC[r.cat][m])||0); },0);
+      const a=rows.reduce(function(s,r){ return s+((actC[r.cat]&&actC[r.cat][m])||0); },0);
+      return {lab:m.replace(".","-"),plan:p,act:a,diff:a-p,rate:p?(a-p)/p:null};
+    });
+    note="月视图只列有实际或预算数据的月份。";
+  }else{
+    const qs=[...new Set(months.map(function(m){ return m.slice(0,4)+"Q"+(Math.floor((+m.slice(5,7)-1)/3)+1); }))].sort();
+    qs.forEach(function(q){
+      const need=paQuarterMonths(q);
+      if(!need.every(function(m){ return months.indexOf(m)>=0; })) return;   /* 缺月不写 */
+      const p=rows.reduce(function(s,r){ return s+need.reduce(function(t,m){ return t+((planC[r.cat]&&planC[r.cat][m])||0); },0); },0);
+      const a=rows.reduce(function(s,r){ return s+need.reduce(function(t,m){ return t+((actC[r.cat]&&actC[r.cat][m])||0); },0); },0);
+      /* 该季度里哪几个月还没有实际流水：标出来，避免"季度实际"被误读成三个月都齐 */
+      const missAct=need.filter(function(m){ return actMonths.indexOf(m)<0; });
+      const missLab=missAct.length?("（缺 "+missAct.map(function(m){ return (+m.slice(5,7))+"月流水"; }).join("、")+"）"):"";
+      perRows.push({lab:q,miss:missLab,plan:p,act:a,diff:a-p,rate:p?(a-p)/p:null});
+    });
+    note=perRows.length?"季度视图只显示<b>三个月都有数据</b>的季度；括号里注明还缺哪个月的流水，缺月不计入实际。"
+      :("季度数据不齐（"+months.map(function(m){ return m.replace(".","-"); }).join("、")+"），按你的要求先不列示；补齐同季 3 个月后自动出现。");
+  }
+  document.getElementById("paTrend").innerHTML=`
+    <thead><tr><th style="text-align:left">${gran==="q"?"季度":"月份"}</th><th>预算</th><th>实际</th><th>偏差额</th><th>偏差率</th></tr></thead>
+    <tbody>${perRows.map(function(r){
+      return `<tr><td style="text-align:left"><b>${r.lab}</b>${r.miss?`<span class="tag t-warn" style="margin-left:6px">${r.miss}</span>`:""}</td>
+        <td>${r.plan?fmt(r.plan):"—"}</td><td>${r.act?fmt(r.act):"—"}</td>
+        <td class="${r.diff>0?'red':(r.diff<0?'green':'')}">${r.diff?((r.diff>0?"+":"−")+fmt(Math.abs(r.diff))):"—"}</td>
+        <td class="${r.rate===null?'':(r.rate>0?'red':'green')}">${r.rate===null?"—":pctTxt(r.rate)}</td></tr>`;
+    }).join("")||`<tr><td colspan="5" style="color:#9CA3AF;padding:14px">没有可列示的${gran==="q"?"季度":"月份"}</td></tr>`}</tbody>`;
+  document.getElementById("paTrendNote").innerHTML=note;
+
+  /* —— 未匹配清单 —— */
+  const uncls=(DATA.actMeta&&DATA.actMeta.uncls)||0;
+  document.getElementById("paGap").innerHTML=`
+    <div style="font-size:12px;line-height:1.95">
+      <div style="font-weight:700;color:#B45309;margin-bottom:4px">预算有、实际零命中（${gapOnly.length} 类）</div>
+      ${gapOnly.length?gapOnly.map(function(r){ return `<div>· <b>${r.cat}</b>　预算 ${fmt(r.plan)} 元</div>`; }).join("")
+                       :'<div style="color:#9CA3AF">无</div>'}
+      <div style="font-weight:700;color:#C0392B;margin:12px 0 4px">实际有、预算无对应（${actOnly.length} 类）</div>
+      ${actOnly.length?actOnly.map(function(r){ return `<div>· <b>${r.cat}</b>　实际 ${fmt(r.act)} 元</div>`; }).join("")
+                       :'<div style="color:#9CA3AF">无</div>'}
+    </div>
+    <div class="note">口径匹配率 <b>${matchRate===null?"—":(matchRate*100).toFixed(1)+"%"}</b>（可映射 ${fmt(cov.可映射)} ＋ 部分可映射 ${fmt(cov.部分可映射)} ／ 分母 ${fmt(cov.total)}）。
+      流水侧还有 <b>${uncls}</b> 笔规则没认出来（科目为空），到「模块一 · 数据接入」的人工审核里补科目后，这里的分类会跟着变。</div>`;
 }
 
 /* ================= 渲染：输出报表（月度损益 + 季度全景） ================= */
@@ -2912,9 +3250,13 @@ function showTab(id){
   if(id==="p4") renderP4();
   if(id==="p5") renderP5();
 }
-const TABS=[["p0","数据接入"],["p1","管理视角"],["p2","下钻分析"],["p3","收支明细"],["p4","预实分析"],["p5","输出报表"]];
-document.getElementById("tabs").innerHTML=TABS.map((t,i)=>
-  `<button data-t="${t[0]}" class="${i===0?"on":""}"><b>${["〇","一","二","三","四","五"][i]}</b>${t[1]}</button>`).join("");
+/* 导航按钮的「数据 / 分析 / 测算」分组由 eco_module 的 groupTabs() 负责排布，
+   这里只给出全部 9 个入口（含资金计划、参数假设、预实比对），顺序按分组习惯排列。 */
+const TABS=[["p0","流水接入"],["p6","资金计划"],["p1","管理视角"],["p2","下钻分析"],
+            ["p3","收支明细"],["p4","预实分析"],["p8","预实比对"],["p7","参数假设"],["p5","输出报表"]];
+document.getElementById("tabs").innerHTML=TABS.map(function(t){
+  return `<button data-t="${t[0]}"><i class="eco-dot"></i>${t[1]}</button>`;
+}).join("");
 document.getElementById("tabs").addEventListener("click",e=>{
   const b=e.target.closest("button"); if(b) showTab(b.dataset.t);
 });
@@ -2930,15 +3272,29 @@ document.addEventListener("change",e=>{
 document.addEventListener("click",async e=>{
   const go=e.target.closest("[data-go]");
   if(go){
+    var __n=+go.dataset.go;
+    /* 本页还没有成功导入新文件时，先拦一下：避免"以为导入了，下一页全是旧批次的数据" */
+    if(__n>=2){
+      var __hasBatch=!!(S.batchKeys && Object.keys(S.batchKeys).length);
+      var __now=Date.now();
+      if(!__hasBatch && !(S.__noImpWarn && __now-S.__noImpWarn<5000)){
+        S.__noImpWarn=__now;
+        var __last=(S.raw&&S.raw.fileLog&&S.raw.fileLog.length)?S.raw.fileLog.map(function(x){return x.name;}).join("、"):"无";
+        toast("注意：本页还没有成功导入新文件，下一步看到的是数仓已有数据（本次会话未导入）。确认要继续请 5 秒内再点一次。", true);
+        return;
+      }
+    }
     S.resetArm = null;
     if(go.dataset.commit === "1" && !(await commitManual()).ok) return;
-    S.step=+go.dataset.go; renderSteps(); renderStepBody();
+    S.step=__n; renderSteps(); renderStepBody();
     window.scrollTo({top:0,behavior:"smooth"}); return;
   }
   /* 步骤条不可点击：只能通过页面里的「下一步：人工审核」等按钮推进 */
   if(e.target.closest("[data-step]")) return;
   const tb=e.target.closest("[data-tab]");
   if(tb){ showTab(tb.dataset.tab); return; }
+  const pag=e.target.closest("[data-pag]");
+  if(pag){ S.paGran=pag.dataset.pag; renderP4(); return; }
   const wf=e.target.closest("[data-wf]");
   if(wf){S.wfMonth=+wf.dataset.wf;renderP1();return;}
   const co=e.target.closest("[data-co]");
@@ -3769,9 +4125,34 @@ function setBusyText(t){
   document.querySelectorAll(".busyBar").forEach(el=>{ el.textContent = t; });
 }
 
+/* 页面是不是旧版本：看板文件改过（服务端 mtime 变了）而浏览器里跑的还是老 JS 时，
+   老逻辑可能把拖进来的文件悄悄丢掉，用户只会看到「导入没成功」。这里先拦一下。
+   顺带做一次「断线重连」：页面首屏连不上（服务刚重启/端口刚起）时 WH.on 会一直是 false，
+   不重连的话后面每次导入都只进内存。 */
+async function pageFreshCheck(){
+  if(!window.WH_PAGE_BUILD) return true;              /* 非数仓托管（直接双击 html）不校验 */
+  try{
+    const r=await fetch("/api/health",{cache:"no-store"});
+    const d=await r.json();
+    if(d && d.html_build && String(d.html_build)!==String(window.WH_PAGE_BUILD)){
+      S.doneErr=true;
+      S.doneMsg="看板文件已更新，当前页面还是旧版本：请按 Ctrl+F5 刷新后重新导入（旧版本可能把拖进来的文件直接丢掉）";
+      flash("看板已更新，请按 Ctrl+F5 刷新页面后再导入", true);
+      try{ renderStepBody(); }catch(e){}
+      return false;
+    }
+    if(d && d.ok && !WH.on){                 /* 服务在，只是本页当初没连上 → 就地重连 */
+      WH.on=true;
+      try{ await window.WH_REFRESH(); }catch(e2){}
+    }
+  }catch(e){}
+  return true;
+}
+
 async function readMany(fileList, hintKind, opts){
   const files = [...fileList];
   if(!files.length) return;
+  if(!(await pageFreshCheck())) return;
   const pack = { flow:{rows:[], meta:null, items:[], dup:0},
                  plan:{rows:[], meta:null, items:[], dup:0} };
   let log = [];
@@ -3780,18 +4161,16 @@ async function readMany(fileList, hintKind, opts){
   S.doneMsg = null; S.doneErr = false;
   S.busy = {n: files.length, done: 0, name: ""};
   renderStepBody();
-  /* 同名文件重复上传：直接判失败并在「上传结果」里标出来 */
+  /* 同名文件重复上传：同一批里选两次的跳过；数仓里已存在同名文件的允许「覆盖导入」（后端按文件+行号原地替换） */
   const knownFiles=new Set(((window.__WH_FILES)||[])
     .map(function(n){ return String(n||"").trim(); }).filter(Boolean));
   const thisBatchSeen=new Set();
   for(let i = 0; i < files.length; i++){
     const f = files[i];
     const nm=String(f.name||"").trim();
-    if(knownFiles.has(nm) || thisBatchSeen.has(nm)){
+    if(thisBatchSeen.has(nm)){
       log.push({name:f.name, ok:false, kind:"—",
-        reason: thisBatchSeen.has(nm)
-          ? "同名文件重复选择，本次只导入一次"
-          : "该文件已上传过（数仓里已有同名文件），本次跳过；如确需覆盖，请改名后再上传"});
+        reason:"同名文件重复选择，本次只导入一次"});
       S.busy = {n: files.length, done: i+1, name: f.name};
       renderStepBody();
       continue;
@@ -3867,43 +4246,70 @@ async function readMany(fileList, hintKind, opts){
     S.mScope="batch"; S.batchDone=false;
   }
   if(okPlan) commitPlan(pack.plan.rows, pack.plan.meta, pack.plan.items, pack.plan.dup);
+  /* 先确保落库成功再整体刷新，避免「导入完马上下钻分析还是空图」 */
+  const thisLog=log.slice();                 /* 本次解析结果：刷新后仍只展示这一批的文件 */
   /* 文件名按「本次实际导入成功的文件」取名，多个文件时就记「N 个文件」，
      与页面显示的批次名保持一致，避免出现「csv 的名字配 31 笔 xlsx 数据」 */
   const _batchName=function(items){
     const a=(items||[]).filter(function(x){ return x.ok; }).map(function(x){ return x.name; });
     return a.length>1?(a.length+" 个文件"):(a[0]||"上传文件");
   };
-  const thisLog=log.slice();                 /* 本次解析结果：刷新后仍只展示这一批的文件 */
   if(okFlow) importPending.flow={kind:'flow',fileName:_batchName(pack.flow.items),rows:pack.flow.rows};
   if(okPlan) importPending.plan={kind:'plan',fileName:_batchName(pack.plan.items),rows:pack.plan.rows};
   storeImportDrafts();
-  /* 先确保落库成功再整体刷新（flushImports 内部已 await WH_REFRESH），
-     避免「导入完马上下钻分析还是空图」；回包里带后端判重结果用于区分重复导入 */
+  /* 落库失败一定说失败：解析成功但没写进数仓时若还显示「已导入」，
+     用户会带着旧批次的数据点「下一步」，看上去就是「导入没成功」。
+     flushImports 内部已 await WH_REFRESH，并把每批回包放在 results 里。 */
+  if(!WH.on && okFlow){
+    S.lastImport=null;
+    S.doneErr=true;
+    S.doneMsg="没连上数仓：本次只在页面临时解析了 "+okFlow+" 笔，没有写入数仓。请点右上角「数仓未连接」徽标重连，或按 Ctrl+F5 刷新后重新导入";
+    try{ S.batchKeys={}; S.batchDone=false; }catch(e0){}
+    flash("导入失败：没连上数仓，数据没入库", true);
+    try{ renderStepBody(); }catch(e2){}
+    return;
+  }
   const flushRes=await flushImports();
-  const _dup=((flushRes&&flushRes.results)||[]).some(function(r){ return r && r.duplicated; });
-  S.lastImport = {
-    ok: true,
-    files: files.length,
-    flowFiles: pack.flow.items.filter(x=>x.ok).length,
-    planFiles: pack.plan.items.filter(x=>x.ok).length,
-    rows: okFlow, planRows: okPlan, dup: pack.flow.dup + pack.plan.dup,
-    cross: (okPlan > 0 && hintKind === "flow") || (okFlow > 0 && hintKind === "plan")
-  };
   if(!flushRes || flushRes.ok===false){
-    /* 落库失败：workspaceStatus 已提示并露出「重试保存」，草稿保留，这里不报成功 */
-    S.doneMsg=null; S.doneErr=false;
-  }else if(_dup){
+    const why=(flushRes&&flushRes.error)||"数仓没有返回写入结果";
+    S.doneErr=true;
+    S.doneMsg="写入数仓失败："+why+"；本次解析到的 "+okFlow+" 笔还没有入库。确认数仓服务在运行后重新拖入同一文件，或点上方「重试保存导入数据」";
+    S.lastImport=null;
+    try{ S.batchKeys={}; S.batchDone=false; }catch(e0){}
+    try{ S.raw.fileLog=thisLog; }catch(e1){}
+    flash("导入失败：写入数仓失败（"+why+"），数据没入库", true);
+    try{ renderStepBody(); }catch(e2){}
+    saveWorkspace();
+    return;
+  }
+  const _res=flushRes.results||[];
+  const r0=_res.filter(function(x){ return x && x.ok; })[0]||{};
+  /* 本批批次号直接取服务端返回的，不依赖刷新链路——人工审核「只看本批」靠它 */
+  if(r0.batch) S.batchId=r0.batch;
+  const _dup=_res.some(function(r){ return r && r.duplicated; });
+  const written=(r0.rows||0)+(r0.updated||0);
+  if(_dup){
     /* 重复导入：不留申请记录、不留预览痕迹，只提示一下，页面回到空白可继续上传 */
     S.doneMsg=null; S.doneErr=false;
     try{ S.lastImport=null; }catch(e0){}
     S.raw.fileLog=[]; S.raw.flowFail=[];
     flash("导入失败：该文件内容与数仓已有流水完全重复，没有新增任何记录", true);
   }else if(okFlow){
-    /* 成功提示等后端判重结果回来再定（重复导入不能提示「已导入」） */
-    S.doneErr=false;
+    try{ S.raw.fileLog=thisLog; }catch(e1){}
     const nm=thisLog.length>1?`${thisLog.length} 个文件`:((thisLog[0]&&thisLog[0].name)||"上传文件");
-    S.doneMsg=`已导入：${nm}（${okFlow} 笔）`;
+    S.doneErr=false;
+    S.doneMsg=`已导入：${nm}（${written||okFlow} 笔 · 已写入数仓）`;
+    S.lastImport = {
+      ok: true,
+      files: files.length,
+      flowFiles: pack.flow.items.filter(x=>x.ok).length,
+      planFiles: pack.plan.items.filter(x=>x.ok).length,
+      rows: okFlow, planRows: okPlan, dup: pack.flow.dup + pack.plan.dup,
+      cross: (okPlan > 0 && hintKind === "flow") || (okFlow > 0 && hintKind === "plan")
+    };
   }
+  try{ renderStepBody(); }catch(e2){}
+  try{ if(typeof showTab==="function") showTab(S.tab||"p0"); }catch(e3){}
   saveWorkspace();
   renderStepBody();
 }
@@ -4191,7 +4597,14 @@ document.addEventListener("click",e=>{
   const hcb=e.target.closest("#mHistClose");
   if(hcb){ S.mHist=null; renderManual(); return; }
   const mf=e.target.closest("[data-mf]");
-  if(mf){ S.mFilter=mf.dataset.mf; renderManual(); return; }
+  if(mf){
+    S.mFilter=mf.dataset.mf;
+    /* 只重画表格不会更新筛选钮高亮，这里同步，否则看着像"按不动" */
+    document.querySelectorAll("[data-mf]").forEach(function(x){
+      x.classList.toggle("on", x.dataset.mf===S.mFilter);
+    });
+    renderManual(); return;
+  }
   const msave=e.target.closest("#mSave");
   if(msave){
     msave.disabled=true;

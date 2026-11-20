@@ -16,8 +16,9 @@
 | GET `/api/template` | `id=TPL-05` 或 `TPL-06` | 空白 XLSX；下载计数增加 |
 | GET `/api/uploaded` | `name`、`inline=1` 可选 | 已上传原件，仅允许 uploads 内的文件 |
 | GET `/api/submissions` | — | 提报清单 |
-| GET `/api/submission` | `id` | 单条提报、明细和审批日志 |
+| GET `/api/submission` | `id` | 单条提报、明细、附页（`appendix` / `appendix_sales` / `appendix_expense`）和审批日志 |
 | GET `/api/locked` | `period`、`entity` 可选 | 已锁定/已核销计划明细 |
+| GET `/api/appendix` | `period`、`entity` 可选 | 已锁定/已核销计划的附页明细（客户×商品 / 部门×费用项），管理视角、下钻、收支明细的计划口径用 |
 | GET `/api/export` | — | 流水、旧计划和人工标签 Excel |
 | GET `/db` | `t`、`limit` 可选 | 数仓表预览，具体可选表以页面为准 |
 
@@ -45,6 +46,8 @@
 人工标签格式为 `{"manual":{"日期|金额|对方名称":{"l1":"一级分类","l2":"二级分类","cf":"现金流类别"}},"merge":true}`。金额需规范化，业务键应使用系统生成值，避免客户端自行拼出不同格式。
 
 计划上传使用 `Content-Type: application/octet-stream`，请求体为文件原字节。头部：`X-File-Name` 文件名、`X-Period`（YYYY-MM）、`X-Actor` 操作人，`X-Submit: 1` 表示尝试直接提交。中文头值应 URL 编码。成功返回提报 ID、期间、主体、版本、明细数、汇总、校验报告和原件保存位置；源表转换可能返回多期间提报结果。
+
+上传按文件内容 SHA256 查重：与已有提报单（非作废）内容完全相同时返回 409 与 `duplicate: true`（含原提报单 ID），不建新单；解析失败返回 4xx/5xx 并提示修正后重新上传。成功、失败、拦截三种结果都会写一条申请记录（`/api/requests?kind=plan`，状态分别为 已上传 / 失败 / 已拦截）。批准锁定时后端把有效明细写入 `dwd_plan`，`/api/rows` 的 plan 即随之更新。
 
 审批 `action` 支持提交、批准、退回、发起变更、核销。退回必须说明原因；无效状态或闸门失败通常返回 409，缺少操作人返回 400，提报不存在返回 404。`force` 只绕过对应有效闸门并留下记录，不构成权限授权。
 

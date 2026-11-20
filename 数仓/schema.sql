@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS plan_submission (
   period       TEXT NOT NULL,                -- YYYY-MM
   version      INTEGER NOT NULL DEFAULT 1,
   file_name    TEXT,
+  file_sha     TEXT,                         -- 上传文件 SHA256，文件级去重（重复上传拦截）
   tpl_ver      TEXT,
   rule_ver     TEXT,
   status       TEXT NOT NULL DEFAULT '草稿',  -- 草稿/待审/待批/已锁定/已核销/退回/变更中

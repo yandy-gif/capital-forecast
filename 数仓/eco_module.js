@@ -10,7 +10,7 @@
 
 var ECO = window.ECO = {
   on: false, data: null, locked: [], tab: "p6",
-  sel: { sub: null, period: "", entity: "", win: "滚动3月" }, planStep: 1,
+  sel: { sub: null, period: "", entity: "", win: "滚动3月", upPeriod: "" }, planStep: 0,
   lastUpload: null,
   PANES: { p6: 1, p7: 1, p8: 1 }
 };
@@ -20,6 +20,18 @@ if(savedEco){
   ECO.planStep=savedEco.planStep||1;ECO.lastUpload=savedEco.lastUpload||null;ECO.form=savedEco.form||{};
 }
 ECO.tab=S.tab;
+
+/* ---------- 资金计划三步的记忆 ----------
+   目标：有已审批计划时，点「资金计划」不再每次都被丢回「上传」页；
+   用户上次停在哪一步（上传 / 审批 / 进入看板）就回到哪一步。 */
+function savedPlanStep() {
+  var v = +localStorage.getItem("eco.planStep");
+  return (v >= 1 && v <= 3) ? v : 0;
+}
+function setPlanStep(n) {
+  ECO.planStep = n;
+  try { localStorage.setItem("eco.planStep", String(n)); } catch (e) { }
+}
 
 /* 接口地址自适应：
    - 通过 http(s) 打开看板 → 同源相对路径；
@@ -68,6 +80,53 @@ document.addEventListener("click", function (ev) {
   toast("正在从数仓下载 " + cfg[1] + " …");
   window.location.href = API + "/api/template?id=" + cfg[0];
 }, true);
+
+/* ---------- 全局拖拽兜底 ----------
+   流水/计划的拖拽区只挂在第 1 步的虚线框上，拖到页面其他位置原来"毫无反应也不提示"，
+   用户会误以为导入失败。统一兜底：
+   - 拖在合法上传区（流水框 / 计划框 / 资金计划上传框 / 文件选择框）→ 不干预；
+   - 在资金计划页拖到框外 → 提示拖到框内；
+   - 其他位置 → 自动回到「数据接入·导入流水」第 1 步并按流水导入。 */
+(function () {
+  function hasFiles(e) {
+    var t = e.dataTransfer && e.dataTransfer.types;
+    return !!(t && Array.prototype.indexOf.call(t, "Files") >= 0);
+  }
+  document.addEventListener("dragover", function (e) {
+    if (hasFiles(e)) e.preventDefault();
+  });
+  document.addEventListener("drop", function (e) {
+    var fs = e.dataTransfer && e.dataTransfer.files;
+    if (!fs || !fs.length) return;
+    var tgt = e.target;
+    if (tgt && tgt.closest && (tgt.closest("#dz_流水") || tgt.closest("#dz_计划") ||
+        tgt.closest("#ecoDz") || tgt.closest("input[type=file]"))) return;   /* 合法上传区放行 */
+    e.preventDefault();
+    /* 用「当前可见的 pane」判断在不在资金计划页（ECO.tab 初始值是 p6，不可靠） */
+    var pane = document.querySelector(".pane.on");
+    var curTab = (pane && pane.id) || ECO.tab || "p0";
+    if (curTab === "p6" && !document.getElementById("dz_流水")) {
+      toast("请把资金计划表拖到「拖入或点击上传」虚线框内", true);
+      return;
+    }
+    try {
+      if (typeof showTab === "function") window.showTab("p0");
+      if (typeof S !== "undefined" && S) S.step = 1;
+      if (typeof renderSteps === "function") renderSteps();
+      if (typeof renderStepBody === "function") renderStepBody();
+      setTimeout(function () {
+        if (typeof readMany === "function") {
+          readMany(fs, "flow", { append: true });
+          toast("已按「导入流水」处理您拖入的 " + fs.length + " 个文件，可在下方核对上传结果");
+        } else {
+          toast("请把文件拖到「导入银行流水」的虚线框内", true);
+        }
+      }, 350);
+    } catch (err) {
+      toast("请把文件拖到「导入银行流水」的虚线框内", true);
+    }
+  });
+})();
 
 /* ---------- 小工具 ---------- */
 function $(s, r) { return (r || document).querySelector(s); }
@@ -163,10 +222,10 @@ var CSS = [
   "#p6 .eco-ell{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
   ".eco-flow{display:flex;align-items:center;gap:6px;margin:0 0 14px;flex-wrap:wrap}",
   ".eco-flowstep{display:flex;align-items:center;gap:8px;border:1px solid #E3E8F0;background:#fff;",
-  "  border-radius:20px;padding:6px 14px;font-size:12.5px;color:#48566B;cursor:pointer;font-family:inherit}",
+  "  border-radius:20px;padding:6px 14px;font-size:12.5px;color:#48566B;font-family:inherit;",
+  "  cursor:default;user-select:none}",
   ".eco-flowstep b{width:18px;height:18px;border-radius:50%;background:#E9EEF6;color:#48566B;font-size:11px;",
   "  display:flex;align-items:center;justify-content:center;font-weight:700}",
-  ".eco-flowstep:hover{border-color:#B9C6DA}",
   ".eco-flowstep.on{border-color:#1F3864;color:#1F3864;font-weight:700;background:#F7FAFF}",
   ".eco-flowstep.on b{background:#1F3864;color:#fff}",
   ".eco-flowstep.done b{background:#1F6F4A;color:#fff}",
@@ -198,6 +257,8 @@ var CSS = [
   "    border-radius:0 3px 3px 0;background:#1F3864}",
   "  .eco-navgrp{display:block;font-size:10px;color:#98A2B3;letter-spacing:.14em;font-weight:700;",
   "    margin:16px 10px 6px}",
+  "  .eco-navgrp .eco-ii{font-style:normal;background:#F3ECFB;color:#5B3A8E;border-radius:3px;",
+  "    padding:1px 5px;font-size:9px;letter-spacing:0;margin-left:3px}",
   "  .eco-navbrand{display:flex;align-items:baseline;gap:6px;font-size:13px;font-weight:800;",
   "    color:#1F3864;padding:0 10px 14px;letter-spacing:.02em}",
   "  .eco-navbrand span{font-size:10px;font-weight:600;color:#98A2B3}",
@@ -211,7 +272,9 @@ var CSS = [
 ECO.load = function (then) {
   return Promise.all([
     fetch(API + "/api/eco", { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
-    fetch(API + "/api/locked", { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+    fetch(API + "/api/locked", { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+    /* 附页明细：管理视角 / 下钻 / 收支明细的「计划明细」都靠它，粒度＝客户×商品 / 部门×费用项 */
+    fetch(API + "/api/appendix", { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
   ]).then(function (rs) {
     if (!rs[0] || !rs[0].ok) {
       if (!ECO._retried) { ECO._retried = 1; setTimeout(function () { ECO.load(); }, 1500); return; }
@@ -219,7 +282,9 @@ ECO.load = function (then) {
     }
     ECO._retried = 0; ECO.on = true; ECO.data = rs[0];
     ECO.locked = (rs[1] && rs[1].items) || [];
+    ECO.appendix = (rs[2] && rs[2].items) || [];
     applyLockedPlan();
+    applyPlanAppendix();
     clearPlanIfEmpty();
     syncDataNotice(ECO.tab);
     /* 默认期间：优先「有已锁定计划」的最新一期，预实比对才有计划侧可比 */
@@ -236,26 +301,19 @@ ECO.load = function (then) {
   });
 };
 
-/* ---------- 注入导航与面板 ---------- */
+/* ---------- 注入面板（导航按钮由主脚本按三分组渲染，这里不再插按钮） ---------- */
 function inject() {
   var st = document.createElement("style"); st.textContent = CSS; document.head.appendChild(st);
-  var tabs = $("#tabs");
-  if (tabs && !$("#tabs").querySelector('[data-t="p6"]')) {
-    tabs.insertAdjacentHTML("beforeend",
-      '<button data-t="p6"><b>六</b>资金计划</button>' +
-      '<button data-t="p7"><b>七</b>业务参数中心</button>' +
-      '<button data-t="p8"><b>八</b>预实比对·生态</button>');
-  }
   var wrap = ($("#p0") || {}).parentNode;   /* 主内容容器；注意 header 里也有一个 .wrap，不能用 querySelector(".wrap") */
   var footer = wrap ? wrap.querySelector("footer") : null;
   if (wrap && !$("#p6")) {
     var html =
-      '<section class="pane" id="p6"><div class="pane-title"><h2>模块六 · 资金计划</h2>' +
+      '<section class="pane" id="p6"><div class="pane-title"><h2>模块一 · 资金计划</h2>' +
       '<span>模板下载 → 上传计划 → 看文档 → 人工审核通过 → 锁定入库，之后才进管理视角</span></div>' +
       '<div id="ecoP6"></div></section>' +
-      '<section class="pane" id="p7"><div class="pane-title"><h2>模块七 · 业务参数中心</h2>' +
-      '<span>汇率 / 账期 / 回款 / 水位 / 阈值都可调，改完全看板与预实联动</span></div><div id="ecoP7"></div></section>' +
-      '<section class="pane" id="p8"><div class="pane-title"><h2>模块八 · 预实比对（生态）</h2>' +
+      '<section class="pane" id="p7"><div class="pane-title"><h2>模块三 · 参数假设（II期）</h2>' +
+      '<span>汇率 / 账期 / 回款 / 水位 / 阈值都可调，改完全看板与测算联动</span></div><div id="ecoP7"></div></section>' +
+      '<section class="pane" id="p8"><div class="pane-title"><h2>模块一 · 预实比对（生态）</h2>' +
       '<span>已锁定的资金计划 × 银行流水，按 客户×科目×账期 三维比对</span></div><div id="ecoP8"></div></section>';
     if (footer) footer.insertAdjacentHTML("beforebegin", html);
     else wrap.insertAdjacentHTML("beforeend", html);
@@ -268,10 +326,19 @@ function hook() {
   window.showTab = function (id) {
     _showTab(id);
     ECO.tab = id;
+    /* 每次「进入资金计划」都回到第 1 步上传页（含从管理视角返回），允许再次上传文件；
+       审批/上传过程中的内部重渲染不经过 showTab，不受影响 */
+    if (id === "p6") { ECO.planStep = 1; try { localStorage.setItem("eco.planStep", "1"); } catch (eS) { } }
     if (ECO.PANES[id]) ECO.render(id);
     syncDataNotice(id);
     syncLayout();
     try { injectPageNav(id); } catch (e) { }
+    /* 记住当前页：刷新后不会又掉回「数据接入」 */
+    try {
+      if (location.hash !== "#" + id) {
+        history.replaceState(null, "", location.pathname + location.search + "#" + id);
+      }
+    } catch (e2) { }
     if (id === "p0") setTimeout(function () { syncLayout(); rewireTplLabels(); }, 0);
     if (id === "p1") setTimeout(gateP1, 0);
   };
@@ -361,21 +428,27 @@ function renderP6() {
   if (!ECO.sel.sub && subs.length) ECO.sel.sub = subs[0].id;
   var sel = subs.filter(function (s) { return s.id === ECO.sel.sub; })[0] || null;
   var lockedN = (ECO.locked || []).length;
-  var step = ECO.planStep || 1;
-  if (step === 3 && !lockedN) step = ECO.planStep = 2;      /* 没有已通过的计划，不去第 3 步 */
+  /* 有已审批计划时默认停在「进入看板」，并沿用上次停留的步骤，
+     避免从管理视角点回「资金计划」又被丢回上传页 */
+  var step = ECO.planStep || savedPlanStep() || (lockedN ? 3 : 1);
+  if (step === 3 && !lockedN) step = 2;      /* 没有已通过的计划，不去第 3 步 */
+  if (step === 2 && !subs.length) step = 1;  /* 没有提报单，审批页没内容 */
+  ECO.planStep = step;
 
   var html = flowBar(step, subs.length, lockedN);
   if (step === 1) html += p6Upload(subs);
   else if (step === 2) html += p6Approve(subs, sel);
   else html += p6Board(lockedN);
 
-  box.innerHTML = html + '<div class="card" style="margin-top:14px">'
-    + '<h3>申请记录 <span>资金计划导入与审批台账</span></h3><div id="reqBox2"></div></div>';
+  /* 布局：申请记录台账放在最上面，上传/审批结果在下面 */
+  box.innerHTML = '<div class="card" style="margin-bottom:14px">'
+    + '<h3>申请记录 <span>资金计划导入与审批台账 · 上传成功 / 解析失败 / 重复拦截都会留一条</span></h3><div id="reqBox2"></div></div>'
+    + html;
   bindP6();
   injectManualSave();
   if (window.renderReqBoxes) setTimeout(window.renderReqBoxes, 0);
 
-  if (step === 2 && sel && (!sel.items || !sel.logs)) {
+  if (step === 2 && sel && (!sel.items || !sel.logs || !sel.appendix)) {
     fetch(API + "/api/submission?id=" + sel.id, { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (res) {
@@ -397,26 +470,64 @@ function flowBar(step, subN, lockedN) {
     return "";
   }
   var dis3 = lockedN ? "" : ' disabled title="审批通过后才能进入看板"';
+  /* 顶部步骤条＝只读进度指示：不带 data-eco / onclick，点击不切换；
+     翻页只走页面里的「下一步：审批 →」「下一步：进入看板 →」「← 返回上传资金计划表」等按钮 */
+  var roTitle = ' title="进度指示（不可点击）：请用页面下方的「下一步」按钮翻页"';
   return '<div class="eco-flow">' +
-    '<button class="eco-flowstep ' + cls(1) + '" data-eco="planstep" data-s="1"><b>1</b>上传资金计划表</button>' +
+    '<button class="eco-flowstep ' + cls(1) + '" type="button" tabindex="-1"' + roTitle + '><b>1</b>上传资金计划表</button>' +
     '<i class="eco-flowline"></i>' +
-    '<button class="eco-flowstep ' + cls(2) + '" data-eco="planstep" data-s="2"><b>2</b>审批' +
+    '<button class="eco-flowstep ' + cls(2) + '" type="button" tabindex="-1"' + roTitle + '><b>2</b>审批' +
     (subN ? '（' + subN + '）' : '') + '</button>' +
     '<i class="eco-flowline"></i>' +
-    '<button class="eco-flowstep ' + cls(3) + '" data-eco="planstep" data-s="3"' + dis3 + '><b>3</b>进入看板</button>' +
+    '<button class="eco-flowstep ' + cls(3) + '" type="button" tabindex="-1"' + dis3 + roTitle + '><b>3</b>进入看板</button>' +
     '</div>';
 }
 
 /* ① 上传 */
+/* 预算期间可选范围：已有提报期间 + 当前月前后（-6 ~ +12），按月升序 */
+function periodChoices() {
+  var set = {};
+  function add(p) {
+    p = String(p || "").trim();
+    if (/^20\d{2}-(0[1-9]|1[0-2])$/.test(p)) set[p] = 1;
+  }
+  ((ECO.data && ECO.data.submissions) || []).forEach(function (s) { add(s.period); });
+  (ECO.locked || []).forEach(function (i) { add(i.period); });
+  var now = new Date(), y = now.getFullYear(), m = now.getMonth() + 1;
+  for (var i = -6; i <= 12; i++) {
+    var mo = m + i, yy = y + Math.floor((mo - 1) / 12);
+    mo = ((mo - 1) % 12 + 12) % 12 + 1;
+    add(yy + "-" + (mo < 10 ? "0" : "") + mo);
+  }
+  return Object.keys(set).sort();
+}
+function upPeriodValue() {
+  var cur = $("#ecoPeriod") ? String($("#ecoPeriod").value || "") : "";
+  if (cur) return cur;
+  if (ECO.sel.upPeriod) return ECO.sel.upPeriod;
+  var ps = {}, lk = ECO.locked || [];
+  lk.forEach(function (i) { ps[i.period] = 1; });
+  var ks = Object.keys(ps).sort();
+  if (ks.length) return ks[ks.length - 1];                /* 默认最近一期（便于重报/换版） */
+  var now = new Date(), mo = now.getMonth() + 1;
+  return now.getFullYear() + "-" + (mo < 10 ? "0" : "") + mo;
+}
 function p6Upload(subs) {
+  var perVal = upPeriodValue();
+  var opts = periodChoices();
+  if (perVal && opts.indexOf(perVal) < 0) opts.push(perVal);
+  opts.sort();
+  var perSel = '<select class="eco-in" id="ecoPeriod" data-ecosel="upperiod">' +
+    opts.map(function (p) {
+      return '<option value="' + p + '"' + (p === perVal ? " selected" : "") + '>' + p + '</option>';
+    }).join("") + '</select>';
   var h = '<div class="card" style="margin-bottom:14px">' +
     '<div class="eco-hd"><h3>上传资金计划表</h3>' +
     '<a class="eco-btn gh" style="text-decoration:none;display:inline-block;white-space:nowrap" href="' + API +
     '/api/template?id=TPL-05">⬇ 下载模板 v1.0</a></div>' +
     '<div class="eco-grid eco-g2" style="margin-bottom:10px">' +
-    '<label class="eco-k">预算期间 <span style="color:#A5352A">*</span>' +
-    '<input class="eco-in" id="ecoPeriod" placeholder="如 2026-11" value="' +
-    esc($("#ecoPeriod") ? $("#ecoPeriod").value : "") + '"></label>' +
+    '<label class="eco-k">预算期间 <span style="color:#A5352A">*</span>' + perSel +
+    '<span class="eco-k" style="font-weight:400">下拉选择要提报的月份；默认最近一期，重报同期间会自动升版本</span></label>' +
     '<label class="eco-k">操作人 <span style="color:#A5352A">*</span>' +
     '<input class="eco-in" id="ecoActor" placeholder="姓名" value="' +
     esc(($("#ecoActor") && $("#ecoActor").value) || localStorage.getItem("eco.actor") || "") + '"></label>' +
@@ -425,7 +536,9 @@ function p6Upload(subs) {
     '<span class="eco-k">计划表（预算明细）或提报源表（销售 / 部门费用 / 人力）；两项必填后才可上传</span></div>' +
     '<input type="file" id="ecoFile" accept=".xlsx,.xls" style="display:none">' +
     '<div id="ecoUpRes" style="margin-top:10px"></div>' +
-    '<div class="eco-note">上传即把原件存到 数仓/uploads/ 并写入明细；校验结果会直接显示在下方（异常逐条标红）。</div>' +
+    '<div class="eco-note">上传即把原件存到 数仓/uploads/ 并写入明细；每次上传都会写入下方「申请记录」' +
+    '（成功＝已上传 / 解析失败＝失败 / 重复文件＝已拦截）。系统按文件内容 SHA256 查重：' +
+    '与已有提报单完全相同的文件会被拦截，需修改内容后重新上传；解析失败同样需修正后重新上传。</div>' +
     '</div>';
 
   h += '<div class="card"><div class="eco-hd"><h3>本期间已上传</h3>' +
@@ -449,7 +562,9 @@ function p6Upload(subs) {
 /* ② 审批：清单 + 明细 + 意见 + 底部状态 */
 function p6Approve(subs, sel) {
   var h = '<div class="card" style="margin-bottom:14px"><div class="eco-hd"><h3>提报清单</h3>' +
-    '<button class="eco-btn gh" data-eco="reload">刷新</button></div>' +
+    '<span style="display:flex;gap:8px">' +
+    '<button class="eco-btn gh" data-eco="planstep" data-s="1" style="font-size:12px">← 返回上传</button>' +
+    '<button class="eco-btn gh" data-eco="reload">刷新</button></span></div>' +
     '<div class="eco-scroll" style="max-height:220px"><table class="eco-tbl"><thead><tr>' +
     '<th>#</th><th>期间</th><th>主体</th><th>版本</th><th>状态</th><th>行数</th>' +
     '<th>流入(CNY)</th><th>流出(CNY)</th><th>净额</th><th>文件</th></tr></thead><tbody>';
@@ -483,6 +598,31 @@ function p6Approve(subs, sel) {
         '<td class="eco-k eco-ell" title="' + esc(it.note || "") + '">' + esc(it.note || "") + '</td></tr>';
     });
     h += '</tbody></table></div></div>';
+    /* 附页：标准计划表没有附页 sheet 时，后端按明细行生成（流入→附页1，流出→附页2），
+       所以这里正常应能看到与主表一一对应的底稿，而不是 0 条 */
+    var apx = sel.appendix || [];
+    var nS = apx.filter(function (x) { return x.kind === "销售回款明细"; }).length;
+    var nE = apx.filter(function (x) { return x.kind === "费用申报明细"; }).length;
+    h += '<div class="card" style="margin-bottom:14px"><div class="eco-hd"><h3>附页明细</h3>' +
+      '<span class="eco-k">附页1 销售回款明细 ' + nS + ' 条 · 附页2 费用申报明细 ' + nE + ' 条</span></div>';
+    if (!apx.length) {
+      h += '<div class="eco-k">本单还没有附页记录（只影响逐条追溯，不影响主表金额与后续看板取数）。</div>';
+    } else {
+      h += '<div class="eco-scroll" style="max-height:260px"><table class="eco-tbl"><thead><tr>' +
+        '<th>附页</th><th>客户 / 部门</th><th>项目 / 科目</th><th>金额</th><th>源表行</th><th>说明</th>' +
+        '</tr></thead><tbody>';
+      apx.slice(0, 200).forEach(function (a) {
+        h += '<tr><td class="eco-k">' + esc(a.kind || "-") + '</td>' +
+          '<td>' + esc(a.customer || a.dept || "-") + '</td>' +
+          '<td>' + esc(a.item || a.product || "-") + '</td>' +
+          '<td>' + fmt(a.amount) + '</td>' +
+          '<td class="eco-k">' + (a.src_row == null ? "-" : a.src_row) + '</td>' +
+          '<td class="eco-k eco-ell" title="' + esc(a.note || "") + '">' + esc(a.note || "") + '</td></tr>';
+      });
+      if (apx.length > 200) h += '<tr><td colspan="6" class="eco-k">… 共 ' + apx.length + ' 条，仅显示前 200 条</td></tr>';
+      h += '</tbody></table></div>';
+    }
+    h += '</div>';
     h += logsHtml(sel);
   }
 
@@ -510,15 +650,17 @@ function p6Board(lockedN) {
   });
   var per = Object.keys(ps).sort();
   return '<div class="card"><div class="eco-hd"><h3>计划已就绪</h3>' +
-    '<button class="eco-btn" data-eco="goboard" style="font-size:12.5px">打开管理视角 →</button></div>' +
+    '<span style="display:flex;gap:8px">' +
+    '<button class="eco-btn gh" data-eco="planstep" data-s="1" style="font-size:12.5px">← 返回上传资金计划表</button>' +
+    '<button class="eco-btn" data-eco="goboard" style="font-size:12.5px">打开管理视角 →</button></span></div>' +
     '<div class="eco-grid eco-g3" style="margin-bottom:10px">' +
     '<div class="eco-kv"><span>已通过期间</span><b>' + (per.length ? per.join("、") : "—") + '</b></div>' +
     '<div class="eco-kv"><span>计划行数</span><b>' + rows + ' 行</b></div>' +
     '<div class="eco-kv"><span>合计（流入 / 流出）</span><b>' + fmt(inflow) + ' / ' + fmt(outflow) + '</b></div>' +
     '</div>' +
-    '<div class="eco-note">管理视角、预实比对只认「审批通过（已锁定）」的版本；' +
-    '要改金额回第 2 步重新上传变更版本即可。' +
-    (lockedN ? "" : " 当前没有已通过的计划。") + '</div></div>';
+    '<div class="eco-note">管理视角、预实比对只认「审批通过（已锁定）」的版本；审批通过后计划已自动存入数仓，' +
+    '管理视角与下钻分析随之自动刷新。要改金额可点「← 返回上传资金计划表」重新上传变更版本，' +
+    '新版本审批通过前旧版本继续生效。</div></div>';
 }
 
 /* ---------- 流水匹配情况（已匹配 / 系统未匹配） ---------- */
@@ -740,9 +882,20 @@ function upload(file) {
     }
   }).then(function (r) { return r.json(); }).then(function (d) {
     if (!d.ok) {
-      if (res) res.innerHTML = '<div class="eco-hl" style="background:#FDECEA;border-color:#E4B7B2">解析失败：' +
-        esc(d.error || "") + '</div>';
-      toast(d.error || "解析失败", true);
+      /* 文件查重拦截（内容与已有提报单完全相同）与解析失败分开提示，都要重新上传/走变更 */
+      if (d.duplicate) {
+        if (res) res.innerHTML = '<div class="eco-hl" style="background:#FDECEA;border-color:#E4B7B2">' +
+          '<b>重复上传被拦截</b>　' + esc(d.error || "") +
+          '<br><span class="eco-k">已有提报单可在第 2 步「审批」里查看；申请记录会留一条「已拦截」。</span></div>';
+        toast("重复上传被拦截（提报单 #" + d.sub_id + "）", true);
+        ECO.load();
+        return;
+      }
+      if (res) res.innerHTML = '<div class="eco-hl" style="background:#FDECEA;border-color:#E4B7B2">' +
+        '<b>解析失败，需要重新上传</b>　' + esc(d.error || "") +
+        '<br><span class="eco-k">本次失败已写入「申请记录」（状态＝失败）；修正文件后在上方重新上传即可。</span></div>';
+      toast(d.error || "解析失败，请修正后重新上传", true);
+      ECO.load();
       return;
     }
     if (d.kind === "claim") {          /* 提报源表：一次拆出多个月，逐期间建单 */
@@ -759,12 +912,14 @@ function upload(file) {
     ECO.lastUpload = d;
     ECO.sel.sub = d.sub_id;
     if (res) {
-      res.innerHTML = '<div class="eco-hl"><b>' + esc(d.message) + '</b><br>' +
+      res.innerHTML = '<div class="eco-hl" style="background:#E9F6EE;border-color:#A7D9BE">' +
+        '<b style="color:#1E6B44">✓ 上传成功</b>　' + esc(d.message) + '<br>' +
         '<span class="eco-k">期间 ' + esc(d.period) + ' · 主体 ' + esc(d.entity) + ' · v' + d.version +
         ' · ' + d.rows + ' 行 · 流入 ' + fmt(d.inflow) + ' · 流出 ' + fmt(d.outflow) + ' · 净额 ' + fmt(d.net) + '</span>' +
         ((d.warnings || []).length ? '<br><span class="eco-k">提醒：' + esc((d.warnings || []).join("；")) + '</span>' : "") +
         ((d.skipped || []).length ? '<br><span class="eco-k">跳过 ' + d.skipped.length + ' 行：' +
           esc((d.skipped || []).map(function (s) { return "第" + s.row + "行 " + s.subject; }).join("；")) + '</span>' : "") +
+        '<br><span class="eco-k">已写入上方「申请记录」；请到第 2 步提交并审批，审批通过后自动存入数仓并刷新看板。</span>' +
         '</div>';
     }
     var gb = $("#ecoGateBox"); if (gb) gb.innerHTML = gateHtml(d.gates);
@@ -867,6 +1022,50 @@ function applyLockedPlan() {
 
   try { if (typeof S !== "undefined" && S.raw) S.raw.plan = { rows: rows, meta: {}, items: [], dup: 0, name: "资金计划（已审核）" }; } catch (e) { }
   return true;
+}
+
+/* ---------- 附页明细（计划侧的第二层粒度） ----------
+   主表是「科目 × 月份」，附页是「客户×商品 / 部门×费用项 × 月份」。
+   管理视角、下钻、收支明细的计划口径都从这里取，才能看到"具体是哪一笔"。 */
+function appendixDir(kind) {
+  return String(kind || "").indexOf("费用") >= 0 ? "流出" : "流入";
+}
+function applyPlanAppendix() {
+  var rows = (ECO.appendix || []).map(function (a) {
+    return {
+      month: String(a.period || ""), dir: appendixDir(a.kind), kind: a.kind || "附页",
+      subj: a.item || a.product || "", customer: a.customer || "", klass: a.klass || "",
+      dept: a.dept || "", product: a.product || "",
+      amt: Number(a.amount) || 0, note: a.note || "", src_row: a.src_row,
+      sub_id: a.sub_id, version: a.version,
+      src: "附页 #" + a.sub_id + " v" + a.version
+    };
+  });
+  if (typeof DATA !== "undefined" && DATA) DATA.planAppendix = rows;
+  return rows;
+}
+function planAppendix() {
+  return (typeof DATA !== "undefined" && DATA && DATA.planAppendix) || [];
+}
+function appendixParty(r) {
+  return r.customer || r.dept || "—";
+}
+function appendixTableHtml(rows, limit) {
+  var cap = limit || 300;
+  var h = '<div style="max-height:340px;overflow:auto"><table class="eco-tbl"><thead><tr>' +
+    '<th>期间</th><th>附页</th><th>客户 / 部门</th><th>科目 / 费用项</th><th>金额</th><th style="text-align:left">说明</th>' +
+    '</tr></thead><tbody>';
+  rows.slice(0, cap).forEach(function (r) {
+    h += '<tr><td>' + esc(r.month) + '</td><td class="eco-k">' + esc(r.kind) + '</td>' +
+      '<td>' + esc(appendixParty(r)) + '</td>' +
+      '<td>' + esc(r.subj || "—") + '</td>' +
+      '<td class="' + (r.dir === "流入" ? "red" : "green") + '">' + fmt(r.amt) + '</td>' +
+      '<td class="eco-k eco-ell" title="' + esc(r.note || "") + '">' + esc(r.note || "") + '</td></tr>';
+  });
+  if (rows.length > cap) {
+    h += '<tr><td colspan="6" class="eco-k">… 共 ' + rows.length + ' 条，仅显示前 ' + cap + ' 条</td></tr>';
+  }
+  return h + '</tbody></table></div>';
 }
 
 /* =====================================================================
@@ -1153,13 +1352,17 @@ function syncLayout() {
 }
 
 
-/* 左侧导航按板块分组：数据（流水接入、资金计划）/ 分析（管理视角…输出报表）/ 配置（参数、预实生态） */
+/* 左侧导航按板块分组：数据（流水接入、资金计划）/ 分析（管理视角…预实比对）/ 测算 II 期（参数假设、输出报表） */
 function groupTabs() {
   var t = document.getElementById("tabs");
   if (!t || t._grp) return;
   t._grp = 1;
-  var groups = [["数据", ["p0", "p6"]], ["分析", ["p1", "p2", "p3", "p4", "p5"]],
-                ["配置", ["p7", "p8"]]];
+  /* 三个模块，原来的「配置」已并入「测算（II期）」——参数假设就是它 */
+  var groups = [["数据", ["p0", "p6", "p8"]],
+                ["分析", ["p1", "p2", "p3", "p4"]],
+                ["测算", ["p7", "p5"], 1]];
+  var LABEL = { p0: "流水接入", p6: "资金计划", p1: "管理视角", p2: "下钻分析", p3: "收支明细",
+                p4: "预实分析", p8: "预实比对", p7: "参数假设", p5: "输出报表" };
   var btns = {};
   $$("button", t).forEach(function (b) { if (b.dataset && b.dataset.t) btns[b.dataset.t] = b; });
   var used = {};
@@ -1172,17 +1375,13 @@ function groupTabs() {
   groups.forEach(function (g, gi) {
     var hd = document.createElement("div");
     hd.className = "eco-navgrp";
-    hd.textContent = g[0];
+    hd.innerHTML = g[0] + (g[2] ? ' <i class="eco-ii">II期</i>' : "");
     t.appendChild(hd);
     g[1].forEach(function (id) {
       var b = btns[id];
       if (!b) return;
       b.classList.add("eco-g" + (gi + 1));
-      if (!b.querySelector(".eco-dot")) {
-        var dot = document.createElement("i");
-        dot.className = "eco-dot";
-        b.insertBefore(dot, b.firstChild);
-      }
+      b.innerHTML = '<i class="eco-dot"></i>' + (LABEL[id] || b.textContent);
       t.appendChild(b);                                    /* appendChild 即移动，不丢事件 */
       used[id] = 1;
     });
@@ -1273,8 +1472,12 @@ function approveAll() {
   toast("正在审核通过 #" + sub.id + "（" + sub.period + "）…");
   (function step() {
     if (i >= chain.length) {
-      toast("已审核通过并锁定 #" + sub.id + "（" + sub.period + "）");
-      ECO.load(function () { if (ECO.tab === "p6") renderP6(); });
+      toast("已审核通过并锁定 #" + sub.id + "（" + sub.period + "），已自动存入数仓并刷新看板");
+      ECO.load(function () {
+        if (ECO.tab === "p6") renderP6();
+        /* 批准即入库：再按数仓最新数据整体刷新，管理视角 / 下钻 / 明细自动带上新计划 */
+        if (window.WH_REFRESH) { try { window.WH_REFRESH(); } catch (e) { } }
+      });
       return;
     }
     var a = chain[i++];
@@ -1337,7 +1540,7 @@ function ecoClick(b) {
   if (k === "planstep") {
     var sN = +b.dataset.s;
     if (sN === 3 && !(ECO.locked || []).length) { toast("还没有审批通过的资金计划", true); return; }
-    ECO.planStep = sN;
+    setPlanStep(sN);
     renderP6();
     window.scrollTo({ top: 0, behavior: "smooth" });
     return;
@@ -1345,7 +1548,7 @@ function ecoClick(b) {
   if (k === "flowgo") {
     var tg = b.dataset.target;
     if (tg === "board") {
-      if ((ECO.locked || []).length) { showTab("p1"); }
+      if ((ECO.locked || []).length) { setPlanStep(3); showTab("p1"); }
       else { toast("还没有审批通过的资金计划", true); }
       return;
     }
@@ -1370,7 +1573,10 @@ function ecoClick(b) {
         return;
       }
       toast("#" + ECO.sel.sub + " " + d.message);
-      ECO.load();
+      ECO.load(function () {
+        /* 单步「批准」锁定后同样自动刷新看板数据（管理视角 / 下钻） */
+        if (d.status === "已锁定" && window.WH_REFRESH) { try { window.WH_REFRESH(); } catch (e2) { } }
+      });
     });
     return;
   }
@@ -1389,7 +1595,7 @@ function ecoClick(b) {
     });
     return;
   }
-  if (k === "goboard") { showTab("p1"); return; }
+  if (k === "goboard") { setPlanStep(3); showTab("p1"); return; }
   if (k === "flowfilter") { ECO.flowFilter = b.dataset.f; renderP6(); return; }
   if (k === "rerunrules") {
     try {
@@ -1412,6 +1618,7 @@ function ecoClick(b) {
 }
 function ecoSelect(s) {
   var k = s.dataset.ecosel;
+  if (k === "upperiod") { ECO.sel.upPeriod = s.value; return; }
   if (k === "sub") { ECO.sel.sub = +s.value; renderP6(); return; }
   if (k === "concl") {
     ECO.conclMonth = s.value;
@@ -1949,11 +2156,16 @@ function applyServerBalances() {
     var ms = Object.keys(b.byMonth).sort();
     if (!ms.length) return false;
     DATA.balByMonth = b.byMonth;
+    DATA.balLastDay = b.lastDay || {};          /* 月 → 账户 → {date, bal} */
     var lastM = ms[ms.length - 1], o2 = b.byMonth[lastM] || {};
     var accts = Object.keys(o2).filter(function (k) { return k.charAt(0) !== "_"; });
+    var ld = (b.lastDay || {})[lastM] || {};
     DATA.balLatest = {
       month: lastM.replace("-", "."), bal: o2._total, accts: accts, lag: [],
-      detail: accts.map(function (a) { return { acct: a, bal: o2[a], month: lastM }; })
+      detail: accts.map(function (a) {
+        var x = ld[a] || {};
+        return { acct: a, bal: o2[a], month: lastM, date: x.date || "", dayBal: x.bal };
+      })
     };
     if (typeof S !== "undefined" && S) S.cash = o2._total;
     alignBalHist();          /* 月份以流水为准（ACTM），余额按月对齐填进去 */
@@ -2085,6 +2297,161 @@ function syncDataNotice(id) {
 }
 
 
+/* ===== 管理视角补「计划月」 =====
+   v9 的 renderP1 只按「实际银行流水」出数，已审批的计划月（如 12 月）在这里完全看不到，
+   造成"计划批了、管理视角还是上个月"的错觉。这里补三处：
+   ① 计划月卡片（流入/流出/净额/行数）② 逐月滚动表追加计划行 ③ 水位图补虚线预测点 */
+function planMonthSeries() {
+  var rows = (typeof DATA !== "undefined" && DATA.plan) || [];
+  var byM = {};
+  rows.forEach(function (r) {
+    var m = String(r.month || "").replace(".", "-").slice(0, 7);
+    if (!/^20\d{2}-\d{2}$/.test(m)) return;
+    var o = byM[m] || (byM[m] = { month: m, inflow: 0, outflow: 0, n: 0 });
+    if (r.dir === "流入") o.inflow += Number(r.amt) || 0; else o.outflow += Number(r.amt) || 0;
+    o.n++;
+  });
+  return Object.keys(byM).sort().map(function (k) { return byM[k]; });
+}
+
+function ecoPlanMonthBlock() {
+  var p1 = document.getElementById("p1");
+  if (!p1) return;
+  var old = document.getElementById("ecoPlanMonthCard");
+  if (old && old.parentNode) old.parentNode.removeChild(old);
+  var ser = planMonthSeries();
+  if (!ser.length) return;
+  var actKey = {};
+  try { (ACTM || []).forEach(function (m) { actKey[String(m).replace(".", "-")] = 1; }); } catch (e) { }
+  var planOnly = ser.filter(function (x) { return !actKey[x.month]; });
+  if (!planOnly.length) return;
+
+  /* 「计划月视图」卡片已按需求移除：计划月的流入/流出/净额在
+     「收支结构瀑布」（选 12月（计划））与「逐月资金滚动」计划行里看，不再单独出卡片。 */
+
+  /* 水位趋势：在实际月末余额后按计划净流推虚线预测点 */
+  try {
+    var pts = [];
+    (ACTM || []).forEach(function (m, i) {
+      if (DATA.balHist && DATA.balHist[i] != null) {
+        pts.push({ lab: (ACTL && ACTL[m]) || m, bal: DATA.balHist[i], kind: "act" });
+      }
+    });
+    var bal = (DATA.balLatest && DATA.balLatest.bal != null) ? DATA.balLatest.bal : null;
+    if (pts.length && bal != null) {
+      planOnly.forEach(function (x) {
+        bal += x.inflow - x.outflow;
+        pts.push({ lab: parseInt(x.month.slice(5), 10) + "月", bal: bal, kind: "fc" });
+      });
+      var wc = document.getElementById("waterchart");
+      if (wc && pts.length > 1) wc.innerHTML = waterChart(pts, (typeof S !== "undefined" && S.safe) || 0);
+      if (wc && wc.closest) {
+        var card = wc.closest(".card");
+        var h3 = card && card.querySelector("h3");
+        if (h3) h3.innerHTML = "资金水位趋势 <span>" +
+          (ACTM || []).map(function (m) { return (ACTL && ACTL[m]) || m; }).join(" / ") + " 实际月末余额；" +
+          planOnly.map(function (x) { return parseInt(x.month.slice(5), 10) + "月"; }).join(" / ") + " 按计划推算</span>";
+        var nt = card && card.querySelector(".note");
+        if (nt) nt.innerHTML = "实线为各月实际月末余额（按账户月末余额相加）；虚线为按<b>已审批资金计划</b>净流推算的后续月份，" +
+          "橙色虚线为安全线。计划月一旦导入流水，就会改为实际口径。";
+      }
+    }
+  } catch (e) { }
+
+  /* 逐月资金滚动表：末尾追加计划月行，避免"表里没有 12 月" */
+  try {
+    var tb = document.querySelector("#gapbox table tbody");
+    if (tb) {
+      planOnly.forEach(function (x) {
+        var tr = document.createElement("tr");
+        tr.setAttribute("data-plan-month", x.month);
+        tr.innerHTML = '<td>' + parseInt(String(x.month).slice(5), 10) + '月</td>' +
+          '<td class="red">' + fmt(x.inflow) + '</td>' +
+          '<td class="green">' + fmt(x.outflow) + '</td>' +
+          '<td class="' + ((x.inflow - x.outflow) >= 0 ? "red" : "green") + '">' + fmt(x.inflow - x.outflow) + '</td>' +
+          '<td>—</td><td style="text-align:left"><span class="tag t-gray">计划</span></td>';
+        tb.appendChild(tr);
+      });
+      var note = document.querySelector("#gapbox .note");
+      if (note) note.innerHTML = '按数仓实际流水逐月汇总，末尾几行为已审批的资金计划（该月尚无流水，余额待实际）；' +
+        '月末余额取自流水「余额」列（多账户按账户分别取当月最后一条再相加）。';
+    }
+  } catch (e) { }
+}
+
+if (typeof window.renderP1 === "function") {
+  var _ecoRenderP1 = window.renderP1;
+  window.renderP1 = function () {
+    var r = _ecoRenderP1.apply(this, arguments);
+    try { ecoPlanMonthBlock(); } catch (e) { }
+    return r;
+  };
+}
+
+/* ---------- 下钻 / 收支明细：把附页明细接到计划口径上 ---------- */
+function injectP2Appendix() {
+  var p2 = document.getElementById("p2");
+  if (!p2) return;
+  var old = document.getElementById("ecoP2Appendix");
+  if (old && old.parentNode) old.parentNode.removeChild(old);
+  if (typeof S === "undefined" || !S || S.penSrc !== "plan") return;
+  var rows = planAppendix();
+  if (!rows.length) return;
+  var pm = S.penMonth || "all", pd = S.penDir || "all", thr = (S.thr || 0) * 10000;
+  rows = rows.filter(function (r) {
+    if (pm !== "all" && r.month !== pm) return false;
+    if (pd !== "all" && r.dir !== (pd === "收" ? "流入" : "流出")) return false;
+    return r.amt >= thr;
+  });
+  var d = document.createElement("div");
+  d.id = "ecoP2Appendix";
+  d.className = "card";
+  d.style.marginTop = "14px";
+  d.innerHTML = '<h3>附页明细 · 计划底稿 <span>客户×商品 / 部门×费用项，共 ' + rows.length + ' 条</span></h3>' +
+    (rows.length ? appendixTableHtml(rows) :
+      '<div class="eco-k">当前筛选下没有附页明细，换个月份 / 方向 / 阈值试试。</div>') +
+    '<div class="note">主表是「科目 × 月份」，附页是第二层粒度；这里按<b>月份 / 收支方向 / 金额阈值</b>筛选（分类维度看上方主表）。' +
+    '两层级应能逐行勾稽：主表流入合计＝附页1合计，流出合计＝附页2合计。</div>';
+  p2.appendChild(d);
+}
+
+function injectP3Appendix() {
+  var p3 = document.getElementById("p3");
+  if (!p3) return;
+  var old = document.getElementById("ecoP3Appendix");
+  if (old && old.parentNode) old.parentNode.removeChild(old);
+  if (typeof S === "undefined" || !S || S.dSrc !== "plan") return;
+  var rows = planAppendix();
+  if (!rows.length) return;
+  var m = S.dMonth || "all", dir = S.dDir || "all", min = +(S.dMin || 0);
+  var kw = String(S.dKw || "").trim();
+  rows = rows.filter(function (r) {
+    if (m !== "all" && r.month !== m) return false;
+    if (dir !== "all" && r.dir !== (dir === "收" ? "流入" : "流出")) return false;
+    if (r.amt < min) return false;
+    if (kw && (appendixParty(r) + (r.subj || "") + (r.note || "")).indexOf(kw) < 0) return false;
+    return true;
+  });
+  var d = document.createElement("div");
+  d.id = "ecoP3Appendix";
+  d.className = "card";
+  d.style.marginTop = "14px";
+  d.innerHTML = '<h3>附页明细 · 计划底稿 <span>共 ' + rows.length + ' 条（与上方筛选条件一致）</span></h3>' +
+    (rows.length ? appendixTableHtml(rows) :
+      '<div class="eco-k">当前筛选下没有附页明细；把月份/金额放宽，或换到「资金计划明细」口径再看。</div>') +
+    '<div class="note">附页是从提报单带过来的逐条底稿（客户×商品 / 部门×费用项）；只看科目汇总时用上面的主表。</div>';
+  p3.appendChild(d);
+}
+
+if (typeof window.renderP2 === "function") {
+  var _ecoRenderP2 = window.renderP2;
+  window.renderP2 = function () {
+    var r = _ecoRenderP2.apply(this, arguments);
+    try { injectP2Appendix(); } catch (e) { }
+    return r;
+  };
+}
+
 /* 收支明细：若没有资金计划而流水有数据，自动切到流水视图（否则默认空表） */
 if (typeof window.renderP3 === "function") {
   var _ecoR3 = window.renderP3;
@@ -2099,7 +2466,9 @@ if (typeof window.renderP3 === "function") {
         });
       }
     } catch (e) { }
-    return _ecoR3.apply(this, arguments);
+    var r = _ecoR3.apply(this, arguments);
+    try { injectP3Appendix(); } catch (e3) { }
+    return r;
   };
 }
 

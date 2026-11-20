@@ -323,10 +323,41 @@ def parse_plan(path, period=None, params=None, dicts=None):
         appendix = parse_appendix(wb)
     except Exception:
         appendix = []
+    if not appendix:
+        # 标准「预算明细」表通常没有附页 sheet：把明细行按方向落到附页，
+        # 保证「附页1 销售回款明细 / 附页2 费用申报明细」有逐条可追溯的底稿，
+        # 而不是显示 0 条（0 条会被误读成"数据没进来"）。
+        appendix = appendix_from_items(items)
     return {"ok": True, "period": period, "entity": entity, "entities": ents, "appendix": appendix,
             "items": items, "gates": gates, "inflow": inflow, "outflow": outflow, "net": net,
             "dicts": up_dicts, "warnings": warns, "sheets": wb.sheetnames,
             "skipped": skipped, "error_rows": err, "warn_rows": warn}
+
+def appendix_from_items(items):
+    """标准计划表未带附页 sheet 时，用明细行生成附页底稿：
+    流入 → 附页1 销售回款明细；流出 → 附页2 费用申报明细，金额与主表逐行一致。"""
+    out = []
+    for it in items or []:
+        dirn = str(it.get("direction") or "")
+        kind = "销售回款明细" if dirn == "流入" else "费用申报明细"
+        note = "｜".join([x for x in [it.get("segment"), it.get("timing"),
+                                     it.get("owner"), it.get("note")] if x])
+        out.append({
+            "kind": kind,
+            # 只有流入行把业务板块当作「客户/板块」展示；流出行的板块写进说明，
+            # 避免费用附页的「客户 / 部门」列出现业务板块这种错位口径。
+            "customer": it.get("segment") if dirn == "流入" else None,
+            "klass": None,
+            "product": None,
+            "dept": None,
+            "item": it.get("subject"),
+            "qty": None, "price": None, "rate": None,
+            "amount": it.get("amt_cny") or it.get("amt_orig") or 0,
+            "src_row": it.get("src_row"),
+            "note": note or None,
+        })
+    return out
+
 
 def parse_appendix(wb):
     """解析资金计划表的附页（附页1 销售回款明细 / 附页2 费用申报明细）"""
