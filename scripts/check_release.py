@@ -7,6 +7,10 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
+# 内嵌初始数据的页面（v9 源 + v10 产物）：需要核对 DATA 里没有业务记录
+EMBEDDED_PAGES = {'珀研Q4资金预测看板v9.html', '生态资金计划系统v10.html',
+                  '珀研Q4资金预测看板v8.html'}
+
 
 def git(*args):
     return subprocess.check_output(['git', '-C', str(ROOT), *args])
@@ -27,6 +31,14 @@ def main():
             errors.append('疑似凭据：'+name)
         if re.search(r'[A-Za-z]:[\\/]+Users[\\/]+', content):
             errors.append('个人绝对路径：'+name)
+        if p.suffix == '.html' and name not in EMBEDDED_PAGES:
+            # v11 单页看板从 /api 取数，产物里不该内嵌任何业务记录
+            if re.search(r'const DATA\s*=', content):
+                errors.append('页面内嵌了业务数据：'+name)
+            elif re.search(r'"(counterparty|cp_account|biz_key|restricted_kind)"\s*:', content) and \
+                    not re.search(r'/api/(snapshot|meta|import)', content):
+                errors.append('页面含业务字段：'+name)
+            continue
         if p.suffix == '.html':
             found = re.search(r'const DATA = (.*);', content)
             if not found:
