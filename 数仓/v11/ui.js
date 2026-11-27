@@ -7,13 +7,15 @@
 const NAV = [
   { g: '一 · 管理视角', items: [['g-over', '集团资金总貌'], ['g-ent', '公司资金透视']] },
   { g: '二 · 数据输入', items: [['in-flow', '流水归集'], ['in-plan', '资金计划编制']] },
-  { g: '三 · 资金穿透', items: [['p-drill', '资金穿透'], ['p-va', '预实分析']] },
+  { g: '三 · 分析追溯', items: [['p-drill', '资金下钻'], ['p-va', '预实分析']] },
   { g: '四 · 报告输出', items: [['out-cf', '现金流量表']] }
 ];
 const NO = { 'g-over': '1.1', 'g-ent': '1.2', 'in-flow': '2.1', 'in-plan': '2.2', 'p-drill': '3.1', 'p-va': '3.2', 'out-cf': '4' };
 
 /* 缓存：全量行（画 12 期趋势）、上一期行（算环比） */
 S.full = null; S.fullKey = ''; S.prev = null; S.prevKey = '';
+S.overviewChartCompany = { balance: 'ALL', flow: 'ALL' };
+S.offOpen = S.offOpen || new Set();   // 行内「冲减…」展开状态（默认全部收起）
 
 function prevPeriod(sel) {
   if (/^\d{4}-\d{2}$/.test(sel)) {
@@ -36,7 +38,11 @@ async function ensureFull() {
 }
 async function ensurePrev() {
   const p = prevPeriod(S.period);
-  if (!p) return null;
+  if (!p) {
+    S.prev = null;
+    S.prevKey = '';
+    return null;
+  }
   const key = (S.scope || S.entity) + '|' + p;
   if (S.prev && S.prevKey === key) return S.prev;
   try {
@@ -60,65 +66,60 @@ const stepper = (step, labels) => `<div class="steps">${labels.map((t, i) => `
 const chipBtn = (label, on, attr, val, cnt, dim) =>
   `<button class="chipbtn ${on ? 'on' : ''} ${dim ? 'dim' : ''}" data-${attr}="${esc(val)}">${esc(label)}${cnt != null ? `<span class="n">${cnt}</span>` : ''}</button>`;
 
+const chartFilter = (label, control) => `<label class="chart-filter"><span>${label}</span>${control}</label>`;
+const chartPeriod = () => chartFilter('分析期间', `<select data-act="period">${periodOptions(S.period)}</select>`);
+
 /* ---------- 图表 ---------- */
-function svgLineBars(months, ins, outs, w) {
-  w = w || 700; const h = 220, pl = 52, pr = 14, pt = 16, pb = 30;
-  const iw = w - pl - pr, ih = h - pt - pb, max = Math.max(1, ...ins, ...outs);
-  const step = iw / Math.max(months.length, 1), bw = Math.min(14, step / 3.2);
-  const y = v => pt + ih - (v / max) * ih;
-  let g = '', lab = '';
-  for (let i = 0; i <= 3; i++) {
-    const yy = y(max * i / 3);
-    g += `<line x1="${pl}" y1="${yy}" x2="${w - pr}" y2="${yy}" stroke="#EDF0F5"/>`;
-    lab += `<text x="${pl - 8}" y="${yy + 3.5}" text-anchor="end" font-size="10" fill="#9CA3AF">${big(max * i / 3)}</text>`;
-  }
-  let bars = '', xl = '';
-  months.forEach((m, i) => {
-    const cx = pl + step * i + step / 2;
-    bars += `<rect x="${cx - bw - 1}" y="${y(ins[i])}" width="${bw}" height="${Math.max(0, pt + ih - y(ins[i]))}" fill="#C0392B" rx="1" opacity=".9"/>`;
-    bars += `<rect x="${cx + 1}" y="${y(outs[i])}" width="${bw}" height="${Math.max(0, pt + ih - y(outs[i]))}" fill="#2E8B57" rx="1" opacity=".9"/>`;
-    xl += `<text x="${cx}" y="${h - 10}" text-anchor="middle" font-size="10" fill="#6B7280">${Number(m.slice(5))}月</text>`;
-  });
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">${g}${lab}
-    <line x1="${pl}" y1="${pt + ih}" x2="${w - pr}" y2="${pt + ih}" stroke="#D8DEE9"/>${bars}${xl}</svg>
-    <div class="legend"><span><i style="background:#C0392B"></i>流入</span><span><i style="background:#2E8B57"></i>流出</span></div>`;
+function svgMonthlyChart(months, series, { currency = 'CNY', bars = false, title, compact = false, valueLabels = false, width = 540 } = {}) {
+  const height = compact ? 160 : 218, left = 60, right = 20, top = 18, bottom = height - 36;
+  const values = series.flatMap(s => s.values).filter(Number.isFinite);
+  const min = Math.min(0, ...values), max = Math.max(0, ...values);
+  const ceiling = max === min ? 1 : max;
+  const y = v => top + (ceiling - v) / (ceiling - min) * (bottom - top);
+  const step = (width - left - right) / months.length;
+  const x = i => left + step * (i + 0.5);
+  const barWidth = Math.min(18, step / 3.1);
+  const showValues = valueLabels && months.length <= 6;
+  const barSpace = showValues ? Math.min(step * 0.47, 44) : barWidth + 2;
+  const ticks = [min, ...[1, 2, 3].map(i => min + (ceiling - min) * i / 3), 0];
+  const grid = [...new Set(ticks)].sort((a, b) => a - b).map(v => {
+    const axisLabel = v === 0 || Math.abs(y(0) - y(v)) >= 14;
+    return `<line x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}" class="${v === 0 ? 'chart-zero' : 'chart-gridline'}"/>${axisLabel ? `<text x="${left - 8}" y="${y(v) + 4}" text-anchor="end">${big(v)}</text>` : ''}`;
+  }).join('');
+  const labels = months.map((m, i) => (months.length <= 6 || (months.length - 1 - i) % 2 === 0)
+    ? `<text x="${x(i)}" y="${height - 12}" text-anchor="middle">${esc(m)}</text>` : '').join('');
+  const marks = series.map((s, j) => {
+    let path = '', connected = false;
+    const points = s.values.map((v, i) => {
+      if (v == null) { connected = false; return ''; }
+      const hint = `${months[i]} ${s.label} ${yuan2(v)} ${currency}`;
+      if (bars) {
+        const cx = x(i) + (j - (series.length - 1) / 2) * barSpace;
+        const color = v < 0 && s.negativeColor ? s.negativeColor : v === 0 && s.zeroColor ? s.zeroColor : s.color;
+        const label = showValues && v !== 0
+          ? `<text class="chart-bar-value" x="${cx}" y="${y(v) + (v > 0 ? -6 : 13)}" text-anchor="middle">${big(v)}</text>` : '';
+        return `<rect x="${cx - barWidth / 2}" y="${v === 0 ? y(0) - 1 : Math.min(y(v), y(0))}" width="${barWidth}" height="${v === 0 ? 2 : Math.abs(y(v) - y(0))}" rx="2" fill="${color}"><title>${esc(hint)}</title></rect>${label}`;
+      }
+      path += `${connected ? 'L' : 'M'}${x(i)},${y(v)} `;
+      connected = true;
+      return `<circle cx="${x(i)}" cy="${y(v)}" r="4" fill="${s.color}"><title>${esc(hint)}</title></circle>`;
+    }).join('');
+    return (bars ? '' : `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="2.5"/>`) + points;
+  }).join('');
+  return `<svg class="monthly-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(title || '月度现金流入 / 流出')}（${esc(currency)}）">${grid}${marks}${labels}</svg>`;
 }
-function svgBalanceTrend(months, vals) {
-  const w = 700, h = 180, pl = 54, pr = 14, pt = 14, pb = 26;
-  const iw = w - pl - pr, ih = h - pt - pb;
-  const max = Math.max(1, ...vals), min = Math.min(0, ...vals);
-  const y = v => pt + ih - ((v - min) / Math.max(1, max - min)) * ih;
-  const step = iw / Math.max(1, months.length - 1);
-  const pts = vals.map((v, i) => `${(pl + step * i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-  const area = `M${pl},${pt + ih} L${pts.replace(/ /g, ' L')} L${pl + step * (vals.length - 1)},${pt + ih} Z`;
-  let xl = months.map((m, i) => `<text x="${pl + step * i}" y="${h - 8}" text-anchor="middle" font-size="9.5" fill="#6B7280">${Number(m.slice(5))}月</text>`).join('');
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">
-    <path d="${area}" fill="rgba(31,56,100,.08)"/>
-    <polyline points="${pts}" fill="none" stroke="#1F3864" stroke-width="2"/>
-    ${vals.map((v, i) => `<circle cx="${pl + step * i}" cy="${y(v)}" r="2.6" fill="#1F3864"/>`).join('')}
-    <text x="${pl - 8}" y="${pt + 6}" text-anchor="end" font-size="10" fill="#9CA3AF">${big(max)}</text>
-    <text x="${pl - 8}" y="${pt + ih}" text-anchor="end" font-size="10" fill="#9CA3AF">${big(min)}</text>
-    ${xl}</svg><div class="legend"><span><i style="background:#1F3864"></i>月末可用余额</span></div>`;
+
+function svgLineBars(months, ins, outs, currency = 'CNY') {
+  return svgMonthlyChart(months, [
+    { label: '流入', color: 'var(--in)', values: ins },
+    { label: '流出', color: 'var(--out)', values: outs }
+  ], { currency, bars: true }) + '<div class="legend"><span><i style="background:var(--in)"></i>流入</span><span><i style="background:var(--out)"></i>流出</span></div>';
 }
-function svgPair(items, w) {
-  w = w || 560; const labelW = 78, valW = 108, rowH = 34, h = Math.max(60, items.length * rowH + 8);
-  const barW = w - labelW - valW - 8, max = Math.max(1, ...items.map(d => Math.max(d.a, d.b)));
-  let b = `<line x1="${labelW + barW}" y1="4" x2="${labelW + barW}" y2="${h - 4}" stroke="#E5E7EB" stroke-dasharray="3 3"/>`;
-  items.forEach((d, i) => {
-    const y = i * rowH + 4;
-    b += `<text x="0" y="${y + 13}" font-size="11" fill="#374151">${esc(String(d.name).slice(0, 9))}</text>`;
-    b += `<rect x="${labelW}" y="${y + 3}" width="${barW}" height="9" fill="#F1F4F9" rx="2"/><rect x="${labelW}" y="${y + 3}" width="${Math.max(1, d.a / max * barW)}" height="9" fill="#C0392B" rx="2"/>`;
-    b += `<rect x="${labelW}" y="${y + 16}" width="${barW}" height="9" fill="#F1F4F9" rx="2"/><rect x="${labelW}" y="${y + 16}" width="${Math.max(1, d.b / max * barW)}" height="9" fill="#2E8B57" rx="2"/>`;
-    b += `<text x="${w}" y="${y + 11}" text-anchor="end" font-size="10" fill="#C0392B">${big(d.a)}</text>`;
-    b += `<text x="${w}" y="${y + 24}" text-anchor="end" font-size="10" fill="#2E8B57">${big(d.b)}</text>`;
-  });
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto">${b}</svg>
-    <div class="legend"><span><i style="background:#C0392B"></i>流入</span><span><i style="background:#2E8B57"></i>流出</span></div>`;
-}
-function svgWaterfall(start, items, end) {
+function svgWaterfall(start, items, end, balanceBasis = true) {
   const w = 720, h = 250, pl = 60, pr = 10, pt = 16, pb = 46;
   const iw = w - pl - pr, ih = h - pt - pb;
-  const all = [start, end].concat(items.map(i => i.v));
+  let running = start;
+  const all = [start, end].concat(items.map(i => (running += i.v)));
   const max = Math.max(...all, 1), min = Math.min(0, ...all);
   const y = v => pt + ih - ((v - min) / Math.max(1, max - min)) * ih;
   const n = items.length + 2, step = iw / n, bw = Math.min(46, step * 0.62);
@@ -126,54 +127,28 @@ function svgWaterfall(start, items, end) {
   const draw = (i, from, to, color, label, val) => {
     const x = pl + step * i + (step - bw) / 2;
     const top = Math.min(y(from), y(to)), hh = Math.max(1, Math.abs(y(to) - y(from)));
-    bars += `<rect x="${x}" y="${top}" width="${bw}" height="${hh}" fill="${color}" rx="2"/>`;
+    bars += `<rect x="${x}" y="${top}" width="${bw}" height="${hh}" fill="${color}" rx="2"><title>${esc(label)} ${val}</title></rect>`;
     labels += `<text x="${x + bw / 2}" y="${top - 4}" text-anchor="middle" font-size="9.5" fill="#4B5563">${val}</text>`;
-    labels += `<text x="${x + bw / 2}" y="${h - 26}" text-anchor="middle" font-size="9" fill="#6B7280">${esc(String(label).slice(0, 6))}</text>`;
+    labels += `<text x="${x + bw / 2}" y="${h - 26}" text-anchor="middle" font-size="9" fill="#6B7280">${esc(label)}</text>`;
   };
-  draw(0, 0, start, '#1F3864', '期初', big(start));
+  draw(0, 0, start, 'var(--navy)', balanceBasis ? '期初余额' : '变动起点', big(start));
   items.forEach((it, k) => {
     const from = run, to = run + it.v;
-    draw(k + 1, from, to, it.v >= 0 ? '#C0392B' : '#2E8B57', it.name, (it.v >= 0 ? '+' : '') + big(Math.abs(it.v)));
+    draw(k + 1, from, to, it.adjustment ? 'var(--muted)' : it.v >= 0 ? 'var(--in)' : 'var(--out)', it.name, (it.v >= 0 ? '+' : '−') + big(Math.abs(it.v)));
     run = to;
   });
-  draw(n - 1, 0, end, '#1F3864', '期末', big(end));
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">
+  draw(n - 1, 0, end, 'var(--navy)', balanceBasis ? '期末余额' : '净变动', big(end));
+  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="${balanceBasis ? '账户余额勾稽瀑布' : '收支净变动瀑布'}" style="width:100%;height:auto;display:block">
     <line x1="${pl}" y1="${y(0)}" x2="${w - pr}" y2="${y(0)}" stroke="#D8DEE9"/>${bars}${labels}</svg>
-    <div class="legend"><span><i style="background:#C0392B"></i>流入科目</span><span><i style="background:#2E8B57"></i>流出科目</span><span><i style="background:#1F3864"></i>期初/期末</span></div>`;
+    <div class="legend"><span><i style="background:var(--in)"></i>资金增加</span><span><i style="background:var(--out)"></i>资金减少</span><span><i style="background:var(--navy)"></i>${balanceBasis ? '期初／期末余额' : '起点／净变动'}</span></div>`;
 }
-function svgPVA(months, acts, plans, w) {
-  w = w || 720; const h = 250, pl = 56, pr = 14, pt = 16, pb = 44;
-  const iw = w - pl - pr, ih = h - pt - pb;
-  const max = Math.max(1, ...acts, ...plans);
-  const step = iw / Math.max(1, months.length), bw = Math.min(16, step / 3.4);
-  const y = v => pt + ih - (v / max) * ih;
-  let g = '', lab = '';
-  for (let i = 0; i <= 3; i++) {
-    const yy = y(max * i / 3);
-    g += `<line x1="${pl}" y1="${yy}" x2="${w - pr}" y2="${yy}" stroke="#EDF0F5"/>`;
-    lab += `<text x="${pl - 8}" y="${yy + 3.5}" text-anchor="end" font-size="10" fill="#9CA3AF">${big(max * i / 3)}</text>`;
-  }
-  let bars = '', xl = '', line = '';
-  months.forEach((m, i) => {
-    const cx = pl + step * i + step / 2;
-    if (plans[i]) bars += `<rect x="${cx - bw - 1}" y="${y(plans[i])}" width="${bw}" height="${Math.max(0, pt + ih - y(plans[i]))}" fill="#1F3864" rx="1" opacity=".85"/>`;
-    if (acts[i]) bars += `<rect x="${cx + 1}" y="${y(acts[i])}" width="${bw}" height="${Math.max(0, pt + ih - y(acts[i]))}" fill="#9CA3AF" rx="1"/>`;
-    xl += `<text x="${cx}" y="${h - 22}" text-anchor="middle" font-size="10" fill="#6B7280">${Number(m.slice(5))}月</text>`;
-  });
-  let cum = 0;
-  const pts = months.map((m, i) => { cum += (acts[i] - plans[i]); const cx = pl + step * i + step / 2; return `${cx.toFixed(1)},${(pt + 12 + (cum > 0 ? 4 : 10)).toFixed(1)}`; });
-  line = `<polyline points="${pts.join(' ')}" fill="none" stroke="#B45309" stroke-width="1.4" stroke-dasharray="4 3" opacity=".8"/>`;
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">${g}${lab}
-    <line x1="${pl}" y1="${pt + ih}" x2="${w - pr}" y2="${pt + ih}" stroke="#D8DEE9"/>${bars}${line}${xl}</svg>
-    <div class="legend"><span><i style="background:#1F3864"></i>计划</span><span><i style="background:#9CA3AF"></i>实际</span><span><i style="background:#B45309"></i>累计偏差（示意）</span></div>`;
-}
-
 /* ---------- 资金水位（实际 + 预测 + 安全线） ---------- */
 function svgWaterline(months, act, fc, safe, w) {
   w = w || 720;
   const h = 286, pl = 66, pr = 18, pt = 20, pb = 46;
   const iw = w - pl - pr, ih = h - pt - pb;
   const vals = act.filter(v => v != null).concat(fc.filter(v => v != null)).concat(safe ? [safe] : []);
+  if (!vals.length) return '';
   let min = Math.min(...vals), max = Math.max(...vals);
   // 序列全为正时不强行拉进 0，避免上半区被压扁
   min = min > 0 ? min * 0.9 : min * 1.06;
@@ -192,60 +167,60 @@ function svgWaterline(months, act, fc, safe, w) {
   let grid = '', ylab = '';
   for (let i = 0; i <= 3; i++) {
     const v = min + (max - min) * i / 3, yy = y(v);
-    grid += `<line x1="${pl}" y1="${yy}" x2="${w - pr}" y2="${yy}" stroke="#EDF0F5"/>`;
-    ylab += `<text x="${pl - 10}" y="${yy + 3.5}" text-anchor="end" font-size="10.5" fill="#8A94A6">${wan(v)}万</text>`;
+    grid += `<line x1="${pl}" y1="${yy}" x2="${w - pr}" y2="${yy}" class="chart-gridline"/>`;
+    ylab += `<text x="${pl - 10}" y="${yy + 3.5}" text-anchor="end" font-size="10.5" fill="var(--muted)">${wan(v)}万</text>`;
   }
   const y0 = y(0);
-  const zeroLine = (0 >= min && 0 <= max) ? `<line x1="${pl}" y1="${y0}" x2="${w - pr}" y2="${y0}" stroke="#C9D2DF"/>` : '';
+  const zeroLine = (0 >= min && 0 <= max) ? `<line x1="${pl}" y1="${y0}" x2="${w - pr}" y2="${y0}" class="chart-zero"/>` : '';
 
   /* 预测区间底色 */
-  const shade = `<rect x="${x(lastA)}" y="${pt}" width="${w - pr - x(lastA)}" height="${ih}" fill="#F6F8FC"/>`;
-  const shadeTag = `<text x="${x(lastA) + 10}" y="${pt + 14}" font-size="10.5" fill="#9AA4B6">预测区间</text>`;
+  const shade = `<rect x="${x(lastA)}" y="${pt}" width="${w - pr - x(lastA)}" height="${ih}" fill="var(--forecast-bg)"/>`;
+  const shadeTag = `<text x="${x(lastA) + 10}" y="${pt + 14}" font-size="10.5" fill="var(--forecast)">预测区间</text>`;
 
   /* 安全线 */
   let safeLine = '', safeTag = '';
   if (safe) {
     const ys = y(safe);
-    safeLine = `<line x1="${pl}" y1="${ys}" x2="${w - pr}" y2="${ys}" stroke="#E67E22" stroke-width="1.6" stroke-dasharray="7 4"/>`;
-    safeTag = `<text x="${pl + 6}" y="${ys - 8}" font-size="11" fill="#C0651B">安全线 ${wan(safe)}万</text>`;
+    safeLine = `<line x1="${pl}" y1="${ys}" x2="${w - pr}" y2="${ys}" stroke="var(--safety)" stroke-width="1.6" stroke-dasharray="7 4"/>`;
+    safeTag = `<text x="${pl + 6}" y="${ys - 8}" font-size="11" fill="var(--safety)">安全线 ${wan(safe)}万</text>`;
   }
 
   /* 实际折线（实线）+ 预测折线（虚线，从最后一个实际点起） */
   const ptsA = act.map((v, i) => (v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean);
-  let pathA = `<polyline points="${ptsA.join(' ')}" fill="none" stroke="#1F3864" stroke-width="2.2"/>`;
+  const pathA = `<polyline points="${ptsA.join(' ')}" fill="none" stroke="var(--blue)" stroke-width="2.2"/>`;
   const ptsF = [];
   if (act[lastA] != null) ptsF.push(`${x(lastA).toFixed(1)},${y(act[lastA]).toFixed(1)}`);
   fc.forEach((v, i) => { if (v != null) ptsF.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`); });
-  const pathF = ptsF.length > 1 ? `<polyline points="${ptsF.join(' ')}" fill="none" stroke="#1F3864" stroke-width="2" stroke-dasharray="6 4" opacity=".85"/>` : '';
+  const pathF = ptsF.length > 1 ? `<polyline points="${ptsF.join(' ')}" fill="none" stroke="var(--forecast)" stroke-width="2" stroke-dasharray="6 4"/>` : '';
 
   /* 数据点 + 数值标签 */
   let dots = '', tags = '';
   act.forEach((v, i) => {
     if (v == null) return;
     const below = v < (safe || -Infinity);
-    dots += `<circle cx="${x(i)}" cy="${y(v)}" r="3.8" fill="#fff" stroke="#1F3864" stroke-width="2"/>`;
-    tags += `<text x="${x(i)}" y="${y(v) - 10}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${below ? '#C0392B' : '#1F3864'}">${wan(v)}</text>`;
+    dots += `<circle cx="${x(i)}" cy="${y(v)}" r="3.8" fill="var(--card)" stroke="var(--blue)" stroke-width="2"><title>${esc(months[i])} 实际 ${yuan2(v)} 元</title></circle>`;
+    tags += `<text x="${x(i)}" y="${y(v) - 10}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${below ? 'var(--out)' : 'var(--blue)'}">${wan(v)}</text>`;
   });
   fc.forEach((v, i) => {
     if (v == null) return;
     const below = v < (safe || -Infinity);
-    dots += `<circle cx="${x(i)}" cy="${y(v)}" r="3.8" fill="#fff" stroke="${below ? '#2E8B57' : '#1F3864'}" stroke-width="2"/>`;
-    tags += `<text x="${x(i)}" y="${y(v) + 16}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${below ? '#2E8B57' : '#1F3864'}">${wan(v)}</text>`;
+    dots += `<circle cx="${x(i)}" cy="${y(v)}" r="3.8" fill="var(--card)" stroke="${below ? 'var(--out)' : 'var(--forecast)'}" stroke-width="2"><title>${esc(months[i])} 预测 ${yuan2(v)} 元</title></circle>`;
+    tags += `<text x="${x(i)}" y="${y(v) + 16}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${below ? 'var(--out)' : 'var(--forecast)'}">${wan(v)}</text>`;
   });
 
   /* x 轴 */
   let xlab = '';
   months.forEach((m, i) => {
-    xlab += `<text x="${x(i)}" y="${h - 18}" text-anchor="middle" font-size="10.5" fill="#6B7280">${Number(m.slice(5))}月</text>`;
+    xlab += `<text x="${x(i)}" y="${h - 18}" text-anchor="middle" font-size="10.5" fill="var(--muted)">${esc(m.slice(2))}</text>`;
   });
 
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">
+  return `<svg class="waterline-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="资金水位与预测（人民币万元）">
     ${shade}${grid}${zeroLine}${safeLine}${shadeTag}${safeTag}
     ${pathA}${pathF}${dots}${tags}${ylab}${xlab}
   </svg>
-  <div class="legend"><span><i style="background:#1F3864"></i>实际月末可用（实线）</span>
-    <span><i style="background:#1F3864;opacity:.6"></i>计划推算（虚线）</span>
-    <span><i style="background:#E67E22"></i>安全线</span></div>`;
+  <div class="legend"><span><i style="background:var(--blue)"></i>实际月末可用（实线）</span>
+    <span><i style="background:var(--forecast)"></i>预测（虚线）</span>
+    ${safe ? '<span><i style="background:var(--safety)"></i>安全线</span>' : ''}</div>`;
 }
 
 /* ---------- 侧栏 / 顶栏 ---------- */
@@ -267,13 +242,13 @@ function buildHeader() {
     <span class="pill">计划 <b>${m.counts.plans || 0}</b> 行</span>
     <span class="pill">USD/CNY <b>${latest('USD/CNY') ? latest('USD/CNY').rate : '缺失'}</b></span>
     <span class="pill">HKD/CNY <b>${latest('HKD/CNY') ? latest('HKD/CNY').rate : '缺失'}</b></span>
-    <span class="pill">数据截至 <b>${esc((m.aggAt || '').slice(0, 16))}</b></span>`;
+    <span class="pill">聚合刷新 <b>${esc((m.aggAt || '').slice(0, 16))}</b></span>`;
 }
 
 /* ---------- 受限资金（自动识别 + 人工补录） ---------- */
 const RESTR_KIND_ORDER = ['保证金', '未到期定期存款', '境外受监管', '质押存款', '冻结', '公管资产'];
 function restrictedData() {
-  const rs = ((S.full || S.snap || {}).restricted) || {};
+  const rs = ((S.snap || S.full || {}).restricted) || {};
   return {
     total: rs.total || 0, n: rs.n || 0, manual: rs.manual || 0,
     kinds: rs.kinds || [], accounts: rs.accounts || [], rows: rs.rows || [],
@@ -325,11 +300,11 @@ function restrictedCard(scopeName, onlyEntity) {
       if (!list.length) return '';
       return `<details style="margin-top:8px"><summary class="mini">人工补录（自动识别没覆盖到的账户，${list.filter(a => a.restricted).length} 个已填）</summary>
       <div class="scroll tall" style="margin-top:8px"><table class="tbl"><thead><tr><th>主体</th><th>银行</th><th>账号</th><th class="num">末笔余额</th><th class="num">自动受限</th><th class="num">人工补录</th></tr></thead><tbody>
-        ${list.map(o => `<tr><td class="r">${esc(o.entity)}</td><td class="r">${esc(o.bank)}</td><td class="mono">${esc(o.account || '—')}</td>
+        ${list.map(o => `<tr><td class="r">${esc(o.entity)}</td><td class="r">${esc(o.bank)}</td><td class="mono">${esc(o.account || '待补登')}</td>
           <td class="num">${o.balance == null ? '—' : yuan2(o.balance)}</td>
           <td class="num ${o.autoRestricted ? 'out' : 'sub'}">${o.autoRestricted ? yuan2(o.autoRestricted) : '—'}</td>
-          <td class="num"><input class="mono" style="width:96px;text-align:right;border:1px solid #E5E7EB;border-radius:4px;padding:1px 4px"
-            data-act="restricted" data-entity="${esc(o.entity)}" data-bank="${esc(o.bank)}" data-ac="${esc(o.account)}" value="${o.restricted || ''}" placeholder="0"></td></tr>`).join('')}
+          <td class="num">${o.masterAccount != null ? `<input class="mono" style="width:96px;text-align:right;border:1px solid #E5E7EB;border-radius:4px;padding:1px 4px"
+            data-act="restricted" data-entity="${esc(o.entity)}" data-bank="${esc(o.bank)}" data-ac="${esc(o.masterAccount)}" value="${o.restricted || ''}" placeholder="0">` : '—'}</td></tr>`).join('')}
       </tbody></table></div>
       <div class="note">自动识别命中的账户不重复扣人工补录值；只有自动识别为 0 的账户才按人工补录金额扣减。</div></details>`;
     })()}
@@ -345,6 +320,185 @@ function restrictedCard(scopeName, onlyEntity) {
   </div>`;
 }
 
+
+function overviewChartData(kind, company) {
+  const full = S.full || S.snap;
+  const isBalance = kind === 'balance';
+  const group = company === 'ALL';
+  const currency = group ? 'CNY' : (ENT(company).ccy || 'CNY');
+  const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date());
+  const rates = new Map([['CNY', 1]]);
+  // 同一币种整张图使用同一个已生效汇率，避免逐月汇率缺失遮住已有数据。
+  const fx = (S.meta.fx || []).slice().sort((a, b) => b.effective_date.localeCompare(a.effective_date));
+  fx.forEach(rate => {
+    const code = rate.pair.split('/')[0];
+    if (rate.pair.endsWith('/CNY') && rate.effective_date <= today && rate.rate > 0 && !rates.has(code)) {
+      rates.set(code, Number(rate.rate));
+    }
+  });
+  const missing = new Set();
+  const entries = (full.rows || []).filter(r => group || r.entity === company).map(r => {
+    return { row: r, date: isBalance ? (r.balance_date || r.txn_date) : r.txn_date };
+  }).filter(({ row, date }) => date && date.slice(0, 7) <= S.snap.end && (!isBalance || Number.isFinite(row.balance)));
+  const buckets = new Map();
+  entries.forEach(entry => {
+    const month = entry.date.slice(0, 7);
+    if (!buckets.has(month)) buckets.set(month, []);
+    buckets.get(month).push(entry);
+  });
+  const observed = [...buckets.keys()].sort();
+  const months = [];
+  if (observed.length) {
+    const [year, month] = observed.at(-1).split('-').map(Number);
+    for (let i = 11; i >= 0; i--) {
+      const m = new Date(Date.UTC(year, month - 1 - i, 1)).toISOString().slice(0, 7);
+      if (m >= observed[0]) months.push(m);
+    }
+  }
+  const amount = (r, value) => {
+    const code = ENT(r.entity).ccy || 'CNY';
+    if (!group) return value;
+    if (!rates.has(code)) { missing.add(code); return null; }
+    return value * rates.get(code);
+  };
+  const latest = new Map();
+  const updateBalances = batch => {
+    for (const entry of batch) {
+      const { row, date } = entry;
+      const key = JSON.stringify([row.entity, row.bank || '', row.account || '']);
+      const previous = latest.get(key);
+      if (!previous || date > previous.date || (date === previous.date && Number(row.id) >= Number(previous.row.id))) {
+        latest.set(key, entry);
+      }
+    }
+  };
+  if (isBalance) {
+    for (const month of observed) {
+      if (month >= months[0]) break;
+      updateBalances(buckets.get(month));
+    }
+  }
+  const points = months.map(month => {
+    const batch = buckets.get(month);
+    if (!batch) return { month };
+    if (isBalance) {
+      updateBalances(batch);
+      const values = [...latest.values()].map(({row}) => amount(row, row.balance)).filter(Number.isFinite);
+      return { month, balance: values.length ? values.reduce((a, b) => a + b, 0) : null };
+    }
+    const eligible = group ? batch.filter(({row}) => !isInt(row)) : batch;
+    let inflow = 0, outflow = 0, count = 0;
+    for (const {row} of eligible) {
+      const raw = Number.isFinite(row.amount) ? row.amount : (ENT(row.entity).ccy || 'CNY') === 'CNY' ? row.amt_cny : null;
+      if (!Number.isFinite(raw)) continue;
+      const value = amount(row, (row.is_offset || row.offset_of) ? -Math.abs(raw) : raw);
+      if (value == null) continue;
+      if (row.direction === '收') inflow += value;
+      else outflow += value;
+      count++;
+    }
+    return count || !eligible.length ? { month, inflow, outflow } : { month };
+  });
+  return { currency, months, points, missing: [...missing] };
+}
+
+function overviewChartBody(kind, company, compactOverview = false) {
+  const { currency, months, points, missing } = overviewChartData(kind, company);
+  const isBalance = kind === 'balance';
+  const group = company === 'ALL';
+  if (!isBalance) points.forEach(p => { if (p.inflow != null && p.outflow != null) p.net = p.inflow - p.outflow; });
+  const fields = isBalance ? [['balance', '账户余额']] : [['inflow', '流入'], ['outflow', '流出'], ['net', '净流量']];
+  const valueAt = key => points.map(p => p[key] ?? null);
+  const hasData = points.some(p => fields.some(([key]) => p[key] != null));
+  const basis = group ? '最新已生效汇率统一折算' : '公司原币';
+  const scope = isBalance ? '每月取各账户最后已知余额，含沿用余额，未扣受限资金' : (group ? '已确认流水，剔除内部往来' : '已确认流水，含内部往来');
+  const coverage = missing.length ? ` · 未计入缺汇率的 ${esc(missing.join('、'))} 金额` : '';
+  let support = '';
+  if (!isBalance && hasData) {
+    const plot = svgMonthlyChart(months, [{
+      label: '净流量', color: 'var(--in)', negativeColor: 'var(--out)', zeroColor: 'var(--muted)', values: valueAt('net')
+    }], { currency, bars: true, title: '月度净流量', compact: true });
+    const recent = points.findLast(p => Number.isFinite(p.net));
+    const latest = recent ? `<span>${esc(recent.month)} · ${recent.net > 0 ? '+' : ''}${big(recent.net)} ${esc(currency)}</span>` : '';
+    support = compactOverview ? `<details class="support-chart"><summary>月度净流量 ${latest}</summary>${plot}</details>`
+      : `<section class="support-chart"><h4>月度净流量 <span>流入减流出</span></h4>${plot}</section>`;
+  }
+  const chart = !hasData ? '<div class="empty">所选公司暂无可展示数据</div>'
+    : isBalance ? svgMonthlyChart(months, [{ label: '账户余额', color: 'var(--blue)', values: valueAt('balance') }], { currency, title: '账户余额趋势' })
+      : `<div class="flow-plot">
+        <div>${svgLineBars(months, valueAt('inflow'), valueAt('outflow'), currency)}</div>${support}
+      </div>`;
+  return `<div class="overview-chart-meta">${months.length ? esc(months[0] + ' 至 ' + months.at(-1)) + ' · ' : ''}${esc(currency)} · ${basis}</div>
+    ${chart}<div class="note">${scope}${coverage}。</div>
+    ${hasData ? `<details class="chart-data"><summary>查看月度数据</summary>
+      <table class="tbl"><thead><tr><th>月份</th>${fields.map(([, label]) => `<th class="num">${label}（${esc(currency)}）</th>`).join('')}</tr></thead>
+      <tbody>${points.map(p => `<tr><td>${esc(p.month)}</td>${fields.map(([key]) => `<td class="num">${yuan2(p[key])}</td>`).join('')}</tr>`).join('')}</tbody></table></details>` : ''}`;
+}
+
+function overviewChart(kind, title) {
+  const company = S.overviewChartCompany[kind];
+  return `<section class="card dashboard-card overview-chart">
+    <div class="overview-chart-head"><h3>${title}</h3>
+      ${chartFilter('公司', `<select aria-label="${title}公司筛选" data-act="overview-chart-company" data-chart="${kind}">${entityOptions(company, '全部公司')}</select>`)}
+    </div>
+    <div class="overview-chart-data" aria-live="polite">${overviewChartBody(kind, company, true)}</div>
+  </section>`;
+}
+
+function bankDistribution(company, all, acc, showCompanyPicker = false) {
+  const metric = S.compareMetric || 'balance';
+  const names = { balance: '账户余额', available: '可用资金', net: '净流量', inflow: '流入', outflow: '流出' };
+  const stock = metric === 'balance' || metric === 'available';
+  const groups = new Map();
+  const records = (stock ? acc : all).filter(r => r.entity === company &&
+    (stock || metric === 'net' || r.direction === (metric === 'inflow' ? '收' : '支')));
+  records.forEach(r => {
+    const bank = r.bank || '银行待核对';
+    if (!groups.has(bank)) groups.set(bank, { value: 0, count: 0, missing: 0 });
+    const g = groups.get(bank);
+    const value = stock ? (metric === 'balance' ? r.cnyBalance : r.cnyAvail) : r.amt_cny;
+    if (!Number.isFinite(value)) { g.missing++; return; }
+    g.count++;
+    g.value += metric === 'net' && r.direction === '支' ? -value : value;
+  });
+  const list = [...groups].filter(([, g]) => g.count).sort((a, b) => b[1].value - a[1].value);
+  const unavailable = [...groups].filter(([, g]) => !g.count).map(([name]) => name);
+  const low = Math.min(0, ...list.map(([, g]) => g.value));
+  const high = Math.max(0, ...list.map(([, g]) => g.value));
+  const span = high - low || 1, zero = -low / span * 100;
+  const metrics = `<div class="seg comparison-seg" role="group" aria-label="银行分布指标">${Object.entries(names).map(([value, text]) =>
+    `<button type="button" class="${metric === value ? 'on' : ''}" data-act="compare-metric" data-value="${value}" aria-pressed="${metric === value}">${text}</button>`).join('')}</div>`;
+  const rows = list.map(([name, g]) => {
+    const { value, missing } = g;
+    const color = value < 0 || metric === 'outflow' ? 'is-out' : stock ? 'is-balance' : 'is-in';
+    const formatted = (metric === 'net' && value > 0 ? '+' : '') + big(value);
+    return `<li class="comparison-row"><div class="comparison-name">${esc(name)}${missing ? '<small>部分数据</small>' : ''}</div>
+      <div class="comparison-track" aria-hidden="true" style="--zero:${zero}%">
+        <span class="comparison-bar ${color}" style="--start:${(Math.min(0, value) - low) / span * 100}%;--size:${Math.abs(value) / span * 100}%"></span>
+      </div>
+      <span class="comparison-amount" title="${yuan2(value)} 元" aria-label="${yuan2(value)} 元">${formatted}</span></li>`;
+  }).join('');
+  const basis = stock ? '取截至期末的最后已知余额，' + (metric === 'balance' ? '未扣受限资金' : '已扣受限资金') : '按所选公司的已确认流水汇总，含内部往来';
+  const picker = showCompanyPicker && company
+    ? chartFilter('公司', `<select data-act="bank-company">${entityOptions(company)}</select>`) : '';
+  return `<section class="card dashboard-card comparison-card"><div class="comparison-head">
+    <div><h3>银行分布</h3><div class="overview-chart-meta">${company ? esc(company) + ' · ' : ''}${esc(PERIOD_LABEL(S.period))} · 人民币（元）</div></div>
+    <div class="comparison-controls">
+      ${picker}${metrics}
+    </div></div>
+    ${rows ? `<ul class="comparison-list" aria-label="${esc(company)}各银行${names[metric]}">${rows}</ul>` : '<div class="empty">当前范围暂无银行数据</div>'}
+    <div class="note">${basis}。${list.some(([, g]) => g.missing) ? '有缺项时仅展示已有金额。' : ''}</div>
+    ${unavailable.length ? `<details class="chart-data"><summary>${unavailable.length} 家银行暂无可用数据</summary><p>${esc(unavailable.join('、'))}</p></details>` : ''}
+  </section>`;
+}
+
+function periodChange(cur, prev) {
+  if (cur == null || prev == null || !Number.isFinite(cur) || !Number.isFinite(prev)) return '<span class="s">较上期 —（不可比）</span>';
+  const delta = cur - prev;
+  if (delta === 0) return '<span class="s">较上期 — 0 元</span>';
+  return `<span class="s ${delta > 0 ? 'up' : 'down'}">较上期 ${delta > 0 ? '▲ +' : '▼ −'}${big(Math.abs(delta))} 元</span>`;
+}
+
 /* ---------- 1.1 集团资金总貌 ---------- */
 function paneOverview() {
   /* 集团口径：内部往来一律抵销（标识取映射表 is_internal，不按 l1 文字判断） */
@@ -353,8 +507,11 @@ function paneOverview() {
   const intAmt = intRows.reduce((s, r) => s + cny(r), 0);
   const all = rawAll.filter(r => !isInt(r));
   const a = agg(all);
-  const prev = S.prev ? agg((S.prev.rows || []).filter(r => !isInt(r))) : null;
+  const prevRows = S.prev ? (S.prev.rows || []).filter(r => !isInt(r)) : [];
+  const prev = S.prev && prevRows.length && rawAll.length && !S.prev.pending && !(S.prev.missingFx || []).length && !S.snap.pending && !(S.snap.missingFx || []).length ? agg(prevRows) : null;
   const acc = accountRows();
+  const bankCompany = ENT(S.bankCompany).short || ENT(S.entity).short ||
+    (E().find(e => !e.pending) || E()[0] || {}).short || '';
   const avail = acc.reduce((s, o) => s + (o.cnyAvail || 0), 0);
   const rest = acc.reduce((s, o) => s + o.restricted * (o.fx || 1), 0);
   const restA = acc.reduce((s, o) => s + (o.autoRestricted || 0), 0);
@@ -362,75 +519,58 @@ function paneOverview() {
   const balTotal = acc.reduce((s, o) => s + (o.cnyBalance || 0), 0);
   const missing = (S.snap.missingFx || []).concat(acc.filter(o => o.ccy !== 'CNY' && !o.fx).map(o => o.entity));
   const full = S.full || S.snap;
-  const months = (full.allMonths || []).filter(m => m <= S.snap.end).slice(-12);
-  const ins = months.map(m => agg(full.rows.filter(r => r.txn_date.slice(0, 7) === m && !isInt(r))).inflow);
-  const outs = months.map(m => agg(full.rows.filter(r => r.txn_date.slice(0, 7) === m && !isInt(r))).outflow);
-  const balSeries = months.map(m => {
-    const last = m + '-31';
-    const map = new Map();
-    full.rows.forEach(r => { if (r.balance != null && r.txn_date <= last) { const k = r.entity + r.account; const o = map.get(k); if (!o || r.txn_date >= o.txn_date) map.set(k, r); } });
-    let t = 0;
-    map.forEach(r => { const c = ENT(r.entity).ccy || 'CNY'; const f = c === 'CNY' ? 1 : (fxOf(c) ? fxOf(c).rate : null); if (f) t += r.balance * f; });
-    return t;
-  });
-  const byEnt = E().filter(e => !e.pending).map(e => {
-    const g = agg(all.filter(r => r.entity === e.short));
-    return { name: e.short, a: g.inflow, b: g.outflow, avail: acc.filter(o => o.entity === e.short).reduce((s, o) => s + (o.cnyAvail || 0), 0) };
-  }).filter(x => x.a || x.b || x.avail).sort((x, y) => (y.a + y.b) - (x.a + x.b));
-  const byBank = Object.entries(grp(all, r => r.bank)).map(([k, v]) => {
-    const g = agg(v);
-    return { name: k, a: g.inflow, b: g.outflow, avail: acc.filter(o => o.bank === k).reduce((s, o) => s + (o.cnyAvail || 0), 0) };
-  }).sort((x, y) => (y.a + y.b) - (x.a + x.b));
   const alerts = E().filter(e => !e.pending).map(e => {
-    const av = acc.filter(o => o.entity === e.short).reduce((s, o) => s + (o.cnyAvail || 0), 0);
+    const ea = acc.filter(o => o.entity === e.short);
+    const av = ea.reduce((s, o) => s + (o.cnyAvail || 0), 0);
     const line = safeLine(e.short);
-    return { e: e.short, av, line, gap: av - line, set: isSafeSet(e.short) };
-  }).filter(x => x.line > 0).sort((x, y) => x.gap - y.gap);
-  const below = alerts.filter(x => x.gap < 0);
+    return { e: e.short, av, line, gap: av - line, set: isSafeSet(e.short), known: ea.length > 0 && ea.every(o => o.cnyAvail != null) };
+  }).filter(x => x.line > 0 && x.set).sort((x, y) => x.gap - y.gap);
+  const below = alerts.filter(x => x.known && x.gap < 0);
   const wlMap = {};
   E().forEach(x => { if (!x.pending) wlMap[x.short] = waterline(x.short, 8); });
   const pend = S.snap.pending;
+  // 仅将已有实际流水的主体纳入覆盖统计；各主体预测起点可能不同。
+  const forecastEntities = E().filter(e => !e.pending && wlMap[e.short] && wlMap[e.short].lastM &&
+    (full.rows || []).some(r => r.entity === e.short && r.balance != null));
+  const coverage = [0, 1, 2].map(i => forecastEntities.filter(e => wlMap[e.short].planFlags[i]).length);
+  const forecastRisks = forecastEntities.map(e => ({ e: e.short, wl: wlMap[e.short] }))
+    .filter(x => x.wl.breachMonth).sort((a, b) => a.wl.breachMonth.localeCompare(b.wl.breachMonth) || a.wl.minLevel - b.wl.minLevel);
 
   return `
-  <div class="pane-title"><h2>集团资金总貌</h2><span>${PERIOD_LABEL(S.period)} · ${S.snap.start || '—'} ~ ${S.snap.end || '—'} · 口径：已匹配 + 人工确认 · <b>集团汇总已抵销内部往来</b></span></div>
-  <div class="toolbar">
-    <div class="field"><label>期间口径</label><select data-act="period">${periodOptions(S.period)}</select></div>
-    <div class="spacer"></div>
-    <span class="mini">聚合刷新 ${esc((S.snap.aggAt || '').slice(0, 16))} · 待确认 ${pend} 笔未计入 · 已抵销内部往来 ${intRows.length} 笔 / ${big(intAmt)}</span>
+  <div class="pane-title dashboard-title"><h2>集团资金总貌</h2><span>已确认流水 · 集团汇总剔除内部往来</span></div>
+  <section class="dashboard-section" aria-labelledby="group-trends-heading">
+  <div class="dashboard-heading"><div><h3 id="group-trends-heading">资金水位与收支趋势</h3>
+    <p>${esc(S.snap.start || '—')} 至 ${esc(S.snap.end || '—')} · 分析期间同步更新本页指标</p></div>
+    ${chartPeriod()}
   </div>
-  ${missing.length ? `<div class="banner warn"><span class="ic">⚠</span><div><b>汇率缺失：</b>${esc(Array.from(new Set(missing)).join('、'))} 的外币流水无法折人民币，相关金额按 0 计并已标记，请到汇率表补录生效汇率。</div></div>` : ''}
-  ${below.length ? `<div class="banner warn"><span class="ic">⚠</span><div><b>${below.length} 家公司可用资金低于安全线：</b>${below.map(x => `${esc(x.e)} 缺口 <b>${big(-x.gap)}</b>`).join(' · ')}</div></div>`
-      : `<div class="banner ok"><span class="ic">✓</span><div>全部公司可用资金高于安全线。</div></div>`}
+  ${missing.length ? `<div class="banner warn"><span class="ic">⚠</span><div>部分金额缺少生效汇率 · ${esc(Array.from(new Set(missing)).join('、'))}</div></div>` : ''}
 
-  <div class="kpis">
-    ${kpi('可用资金', big(avail), '元', momHtml(avail, availOf(S.prev)) + ` · ${acc.length} 个账户`, 'okline')}
-    ${kpi('受限资金（自动）', big(restA), '元', `<span class="s">${rsum.n} 笔识别 · 人工补录 ${big(rest)}</span>`, 'warnline')}
-    ${kpi('现金流入', big(a.inflow), '元', momHtml(a.inflow, prev && prev.inflow), 'in')}
-    ${kpi('现金流出', big(a.outflow), '元', momHtml(a.outflow, prev && prev.outflow), 'out')}
-    ${kpi('净流量', (a.net >= 0 ? '+' : '−') + big(Math.abs(a.net)), '元', `<span class="s">${a.cnt} 笔确认流水</span>`, a.net >= 0 ? 'in' : 'out')}
-    ${kpi('账户余额合计', big(balTotal), '元', `<span class="s">末笔余额折人民币</span>`)}
+  <div class="kpis overview-kpis">
+    ${kpi('可用资金', big(avail), '元', periodChange(null, null) + ` · ${acc.length} 个账户`, 'okline')}
+    ${kpi('受限资金（自动）', big(restA), '元', periodChange(null, null) + `<span class="s"> · ${rsum.n} 笔识别 · 人工补录 ${big(rest)}</span>`, 'warnline')}
+    ${kpi('本期净流量', (a.net >= 0 ? '+' : '−') + big(Math.abs(a.net)), '元', periodChange(a.net, prev && prev.net) + `<span class="s"> · 流入 ${big(a.inflow)} · 流出 ${big(a.outflow)}</span>`, a.net >= 0 ? 'in' : 'out')}
+    ${kpi('账户余额合计', big(balTotal), '元', periodChange(null, null) + `<span class="s"> · 末笔余额折人民币</span>`)}
   </div>
 
-  <div class="grid g32">
-    <div class="card"><h3>可用资金余额趋势 <span>近 ${months.length} 期 · 月末余额</span></h3>
-      ${months.length ? svgBalanceTrend(months, balSeries) : '<div class="empty">无数据</div>'}</div>
-    <div class="card"><h3>现金流入 / 流出 <span>近 ${months.length} 期</span></h3>
-      ${months.length ? svgLineBars(months, ins, outs) : '<div class="empty">无数据</div>'}</div>
+  <div class="grid g32 overview-charts">
+    ${overviewChart('balance', '账户余额趋势')}
+    ${overviewChart('flow', '现金流入 / 流出')}
   </div>
+  </section>
 
-  <div class="grid g2">
-    <div class="card"><h3>按公司 <span>点击柱子看该公司透视</span></h3>
-      ${byEnt.length ? svgPair(byEnt.map(x => ({ name: x.name, a: x.a, b: x.b }))) : '<div class="empty">无数据</div>'}
-      <div class="chips" style="margin-top:8px">${byEnt.slice(0, 8).map(x => `<button class="chipbtn" data-act="jumpEnt" data-e="${esc(x.name)}">${esc(x.name)} 可用 ${big(x.avail)}</button>`).join('')}</div>
-    </div>
-    <div class="card"><h3>按银行 <span>账户余额与收支</span></h3>
-      ${byBank.length ? svgPair(byBank.map(x => ({ name: x.name, a: x.a, b: x.b }))) : '<div class="empty">无数据</div>'}
-      <div class="chips" style="margin-top:8px">${byBank.slice(0, 8).map(x => `<span class="chip bank">${esc(x.name)} 可用 ${big(x.avail)}</span>`).join('')}</div>
-    </div>
+  <section class="dashboard-section" aria-labelledby="group-comparison-heading">
+  <div class="dashboard-heading"><h3 id="group-comparison-heading">单公司银行情况</h3></div>
+  ${bankDistribution(bankCompany, rawAll, acc, true)}
+  </section>
+
+  <section class="dashboard-section" aria-labelledby="group-data-heading">
+  <div class="dashboard-heading"><div><h3 id="group-data-heading">受限资金与数据口径</h3>
+    <p>最新确认流水月 ${esc(((full.months || []).slice(-1)[0]) || '暂无')} · 待确认 ${pend || 0} 笔 · 剔除内部往来 ${intRows.length} 笔</p></div>
   </div>
-
-  <div class="grid g2">
-    <div class="card"><h3>汇率表 <span>人工维护 · 生效日期</span></h3>
+  <div class="dashboard-data-note">聚合刷新 ${esc((S.snap.aggAt || '').slice(0, 16) || '暂无')}。刷新时间不等于流水截至时间。内部往来金额 ${big(intAmt)} 元。</div>
+  ${restrictedCard('集团合计')}
+  <details class="card dashboard-card dashboard-tools">
+    <summary>汇率表与维护</summary>
       <div class="scroll" style="max-height:220px"><table class="tbl"><thead><tr><th>币种对</th><th class="num">汇率</th><th>生效日期</th><th>录入人</th><th>录入时间</th></tr></thead><tbody>
         ${(S.meta.fx || []).map(f => `<tr><td>${esc(f.pair)}</td><td class="num">${f.rate}</td><td>${esc(f.effective_date)}</td><td>${esc(f.operator || '')}</td><td class="mini">${esc((f.created_at || '').slice(0, 16))}</td></tr>`).join('')}
       </tbody></table></div>
@@ -440,30 +580,38 @@ function paneOverview() {
         <div class="field sm"><label>生效日期</label><input id="fx-date" type="date" value="${S.snap.end ? S.snap.end + '-01' : ''}"></div>
         <button class="btn sm" data-act="fx-save">保存</button>
       </div>
-      <div class="note">不联网。历史期间用期间末生效汇率；无生效汇率时该主体折算显示"汇率缺失"并在上方预警。</div>
-    </div>
+      <div class="note">期间指标采用期末生效汇率，月度趋势统一采用最新已生效汇率。</div>
+  </details>
+  </section>
+
+  <section class="dashboard-section" aria-labelledby="group-risk-heading">
+  <div class="dashboard-heading"><h3 id="group-risk-heading">计划覆盖与风险</h3></div>
+  <div class="card dashboard-card dashboard-risk">
+    <h3>未来三个月 · 计划覆盖 <span>已审批计划 / 有余额流水的主体</span></h3>
+    <div class="coverage-grid">${coverage.map((n, i) => `<div class="coverage-cell">预测第 ${i + 1} 个月<b>${n} / ${forecastEntities.length}</b>${forecastEntities.length - n} 家缺已审批计划</div>`).join('')}</div>
+    <div class="note">各公司预测起点可能不同。不含尚无余额流水的主体。</div>
   </div>
-
-  ${restrictedCard('集团合计')}
-
-  <div class="card">
-    <h3>安全线 · 未来三个月击穿预警 <span>推算口径：当前可用 + 未来三月净流入（计划 × 12 个月达成率）</span></h3>
-    <div class="scroll"><table class="tbl"><thead><tr><th>公司</th><th class="num">可用资金</th><th class="num">安全线（万元）</th><th class="num">安全垫 / 缺口</th><th>状态</th>
+  <div class="card dashboard-card">
+    <h3>异常提醒 · 安全线与未来三个月击穿预警 <span>预测仅供参考 · 大额及净流出阈值未配置</span></h3>
+    ${below.length ? `<div class="banner warn"><b>${below.length} 家公司可用资金低于已设置安全线：</b>${below.map(x => `${esc(x.e)} 缺口 ${big(-x.gap)}`).join(' · ')}；请核对账户、余额时点和汇率。</div>` : '<div class="note">未显示安全线缺口不代表数据完整或所有公司安全；未设置安全线的公司无法判断。</div>'}
+    <div class="decision-list">${forecastRisks.length ? forecastRisks.slice(0, 4).map(x => `<div class="decision-row"><div><a href="#" data-act="jumpEnt" data-e="${esc(x.e)}"><strong>${esc(x.e)}</strong></a><div class="mini">预计 ${esc(x.wl.breachMonth)} 跌破 · 最低水位 ${big(x.wl.minLevel)}</div></div><span class="status">${x.wl.extrapolated ? '含历史外推' : '已审批计划推算'}</span></div>`).join('') : '<div class="note">暂无可展示的预计跌破记录，请先核对计划和数据完整性。</div>'}</div>
+    ${alerts.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>公司</th><th class="num">可用资金</th><th class="num">安全线（万元）</th><th class="num">安全垫 / 缺口</th><th>状态</th>
       <th class="num">未来三月净流</th><th class="num">三月最低水位</th><th>击穿预警</th></tr></thead><tbody>
       ${alerts.map(x => { const wl = wlMap[x.e] || {}; const n3 = wl.net3 || 0;
         return `<tr class="${x.gap < 0 ? 'alert' : ''}">
-        <td><a href="#" data-act="jumpEnt" data-e="${esc(x.e)}">${esc(x.e)}</a></td><td class="num">${big(x.av)}</td>
+        <td><a href="#" data-act="jumpEnt" data-e="${esc(x.e)}">${esc(x.e)}</a></td><td class="num">${x.known ? big(x.av) : '—'}</td>
         <td class="num"><input class="mono" style="width:76px;text-align:right;border:1px solid #E5E7EB;border-radius:4px;padding:1px 4px"
           data-act="safe" data-e="${esc(x.e)}" step="1" value="${Math.round(x.line / 10000)}">${x.set ? '' : ' <span class="mini">建议</span>'}</td>
-        <td class="num ${x.gap < 0 ? 'out' : 'in'}">${x.gap < 0 ? '−' + big(-x.gap) : '+' + big(x.gap)}</td>
-        <td>${x.gap < 0 ? '<span class="chip pending">低于安全线</span>' : '<span class="chip matched">安全</span>'}</td>
+        <td class="num ${x.known && x.gap < 0 ? 'out' : ''}">${!x.known ? '—' : x.gap < 0 ? '−' + big(-x.gap) : '+' + big(x.gap)}</td>
+        <td>${!x.known ? '<span class="chip">余额待核对</span>' : x.gap < 0 ? '<span class="chip pending">低于安全线</span>' : '<span class="chip">高于安全线 · 仍需核对</span>'}</td>
         <td class="num ${n3 >= 0 ? 'in' : 'out'}">${(n3 >= 0 ? '+' : '−') + big(Math.abs(n3))}</td>
         <td class="num">${wl.minLevel == null ? '—' : big(wl.minLevel)}</td>
         <td>${wl.breachMonth ? `<span class="chip pending">${esc(wl.breachMonth)} 击穿</span>` : (wl.minLevel == null ? '<span class="mini">无预测</span>' : '<span class="chip matched">三个月内安全</span>')}</td></tr>`; }).join('')}
-    </tbody></table></div>
+    </tbody></table></div>` : ''}
     <div class="note">击穿预警按「当前可用 + 未来三个月净流入」逐月累加推到安全线以下的首个月份；净流入 = 已审批计划净流入 × 达成率，
       无计划月按近 3 个月实际净流入月均外推（表中「未来三月净流」已含校准）。点公司名可进透视看逐周水位。</div>
-  </div>`;
+  </div>
+  </section>`;
 }
 function availOf(snap) {
   if (!snap) return null;
@@ -472,7 +620,7 @@ function availOf(snap) {
     if (r.balance == null) return;
     const k = r.entity + '|' + r.bank + '|' + (r.account || '');
     const o = last.get(k);
-    if (!o || (r.txn_date + r.id) > (o.txn_date + o.id)) last.set(k, r);
+    if (!o || ((r.balance_date || r.txn_date) + r.id) > ((o.balance_date || o.txn_date) + o.id)) last.set(k, r);
   });
   let t = 0, has = false;
   last.forEach(r => {
@@ -488,10 +636,11 @@ function monthEndBal(rowsArr, month, fxmap) {
   const limit = month + '-31';
   const last = new Map();
   rowsArr.forEach(r => {
-    if (r.balance == null || r.txn_date > limit) return;
+    const date = r.balance_date || r.txn_date;
+    if (r.balance == null || date > limit) return;
     const k = r.entity + '|' + r.bank + '|' + (r.account || '');
     const o = last.get(k);
-    if (!o || (r.txn_date + r.id) > (o.txn_date + o.id)) last.set(k, r);
+    if (!o || (date + r.id) > ((o.balance_date || o.txn_date) + o.id)) last.set(k, r);
   });
   let t = 0, has = false;
   last.forEach(r => {
@@ -504,27 +653,29 @@ function monthEndBal(rowsArr, month, fxmap) {
 /* 水位序列：最近 N 个实际月 + 未来 3 期
    未来三月净流 = 已审批计划净流入 × 12 个月达成率（无计划月按历史外推，并标注）
    主体数据停在几个月前时，中间空月按同一净流补推算（gapMonths），只把最近 3 个月作为报告期 */
-function waterline(e, n) {
+function waterline(e, n, end) {
   const full = S.full || S.snap;
-  const rs = (full.rows || []).filter(r => r.entity === e);
-  const fxmap = full.fx || (S.snap && S.snap.fx) || {};
+  const timeline = (full.rows || []).filter(r => !end || r.txn_date.slice(0, 7) <= end);
+  const rs = timeline.filter(r => r.entity === e);
+  const balanceSnap = end ? S.snap : full;
+  const fxmap = balanceSnap.fx || {};
   const months = Array.from(new Set(rs.map(r => r.txn_date.slice(0, 7)))).sort();
   const actMonths = months.slice(-(n || 8));
   // 水位口径＝月末可用：余额 − 该主体自动识别受限（与 KPI「当前可用」同口径）
-  const restE = (((full.restricted || {}).accounts) || [])
+  const restE = (((balanceSnap.restricted || {}).accounts) || [])
     .filter(a => a.entity === e).reduce((s, a) => s + (a.amt || 0), 0);
   const act = actMonths.map(m => { const v = monthEndBal(rs, m, fxmap); return v == null ? null : v - restE; });
   const plans = (full.plans || []).filter(p => p.entity === e);
   const lastM = actMonths[actMonths.length - 1] || (S.snap.end || '');
   // 全量流水里的最新月：主体自己的数据停在更早时，预测从最新月往后接
-  const globalLast = (full.rows || []).reduce((mx, r) => {
+  const globalLast = timeline.reduce((mx, r) => {
     const mm = r.txn_date.slice(0, 7);
     return mm > mx ? mm : mx;
   }, '');
   const anchor = [lastM, globalLast].filter(Boolean).sort().pop() || lastM;
   const future = [], futureGap = [];
   let cur = lastM;
-  if (cur) {
+  if (cur && act.some(Number.isFinite)) {
     while (anchor && cur < anchor) { cur = shiftMonth(cur.slice(0, 7), 1).slice(0, 7); future.push(cur); futureGap.push(true); }
     for (let i = 0; i < 3; i++) { cur = shiftMonth(cur.slice(0, 7), 1).slice(0, 7); future.push(cur); futureGap.push(false); }
   }
@@ -571,7 +722,7 @@ function waterline(e, n) {
   const repVals = repIdx.map(i => fc[actMonths.length + i]);
   const repNet = repIdx.map(i => fcNet[i]);
   const net3 = repNet.reduce((s, v) => s + v, 0);
-  const line = safeLine(e);
+  const line = isSafeSet(e) ? safeLine(e) : 0;
   const minLevel = repVals.length ? Math.min(...repVals) : null;
   const minIdx = repVals.length ? repVals.indexOf(minLevel) : -1;
   let breachIdx = -1;
@@ -599,124 +750,201 @@ function waterline(e, n) {
 }
 
 /* ---------- 1.2 公司资金透视 ---------- */
+const flowActivity = r => r.l1 || l1Of(r) || '未分类';
+const flowSubject = r => r.l2 || (smByCode(r.code) || {}).l2 || '未分类';
+
+function entityWaterfall(e) {
+  const rs = (((S.full || S.snap) || {}).rows || []).filter(r => r.entity === e);
+  const months = Array.from(new Set(rs.map(r => (r.txn_date || '').slice(0, 7)).filter(m => /^\d{4}-\d{2}$/.test(m)))).sort();
+  if (!months.length) return '<div class="card empty">暂无已确认流水，无法展示收支结构瀑布。</div>';
+  const end = months.includes(S.waterEnd) ? S.waterEnd : months[months.length - 1];
+  const mode = S.waterMode || 'month';
+  const start = mode === 'range' && months.includes(S.waterStart) ? S.waterStart : end;
+  const opts = val => months.map(m => `<option value="${esc(m)}"${m === val ? ' selected' : ''}>${esc(m)}</option>`).join('');
+  const controls = `<div class="chart-filters">
+    ${chartFilter('口径', `<select data-act="water-mode"><option value="month"${mode === 'month' ? ' selected' : ''}>逐月</option><option value="range"${mode === 'range' ? ' selected' : ''}>累计</option></select>`)}
+    ${mode === 'range' ? chartFilter('起始月', `<select data-act="water-start">${opts(start)}</select>`) : ''}
+    ${chartFilter(mode === 'range' ? '结束月' : '月份', `<select data-act="water-end">${opts(end)}</select>`)}
+  </div>`;
+  const currency = ENT(e).ccy || 'CNY';
+  const prefix = `<div class="card dashboard-card dashboard-risk"><div class="dashboard-heading"><div><h3>收支结构瀑布</h3>
+    <p>已确认流水 · ${esc(start === end ? start : start + ' 至 ' + end)} · 公司原币 ${esc(currency)}</p></div>${controls}</div>`;
+  if (start > end) return prefix + '<div class="empty">起始月不能晚于结束月，请调整时间。</div></div>';
+  const selected = rs.filter(r => r.txn_date && r.txn_date.slice(0, 7) >= start && r.txn_date.slice(0, 7) <= end);
+  if (!selected.length) return prefix + '<div class="empty">所选期间没有已确认流水；不能视为零收支。</div></div>';
+
+  const by = new Map();
+  for (const r of selected) {
+    const raw = Number.isFinite(r.amount) ? r.amount : currency === 'CNY' ? r.amt_cny : null;
+    if (!Number.isFinite(raw)) return prefix + '<div class="empty">所选期间有流水缺少原币金额，无法汇总收支。</div></div>';
+    const amount = (r.is_offset || r.offset_of) ? -Math.abs(raw) : raw;
+    const name = flowActivity(r) + (r.direction === '收' ? '流入' : '流出');
+    by.set(name, (by.get(name) || 0) + (r.direction === '收' ? amount : -amount));
+  }
+  const items = Array.from(by, ([name, v]) => ({ name, v }));
+  const net = items.reduce((sum, item) => sum + item.v, 0);
+  const first = start + '-01', limit = end + '-31', opening = new Map(), ending = new Map();
+  rs.forEach(r => {
+    const d = r.balance_date || r.txn_date;
+    if (!Number.isFinite(r.balance) || !d || d > limit) return;
+    const key = accountKey(r);
+    if (newerBalance(r, ending.get(key))) ending.set(key, r);
+    if (d < first && newerBalance(r, opening.get(key))) opening.set(key, r);
+  });
+  const activity = new Map();
+  for (const row of selected) {
+    const key = accountKey(row);
+    if (row.txn_date > (activity.get(key) || '')) activity.set(key, row.txn_date);
+  }
+  const keys = [...new Set([...accounts().filter(a => a.entity === e).map(accountKey), ...activity.keys(), ...ending.keys()])];
+  const bankOf = key => JSON.parse(key)[1];
+  const bankNames = list => [...new Set(list.map(k => bankOf(k) || '银行未识别'))].join('、');
+  const missingOpen = keys.filter(k => !opening.has(k));
+  const missingEnd = keys.filter(k => {
+    const last = ending.get(k);
+    return !last || (last.balance_date || last.txn_date) < (activity.get(k) || '');
+  });
+  const ambiguous = keys.some(key => !bankOf(key) ||
+    (!JSON.parse(key)[2] && keys.some(other => other !== key && bankOf(other) === bankOf(key))));
+  if (missingOpen.length || missingEnd.length || ambiguous) {
+    const issues = [];
+    if (missingOpen.length) issues.push('缺少期初余额：' + bankNames(missingOpen));
+    if (missingEnd.length) issues.push('缺少期末余额或余额早于末笔流水：' + bankNames(missingEnd));
+    if (ambiguous) issues.push('部分流水的银行或账户归属待核对');
+    return prefix + '<div class="note"><strong>仅展示收支净变动</strong> · ' + esc(issues.join('；')) +
+      '。图中起点 0 为变动基准。</div>' + svgWaterfall(0, items, net, false) + '</div>';
+  }
+  const sum = map => Array.from(map.values()).reduce((n, x) => n + x.balance, 0);
+  const begin = sum(opening), finish = sum(ending), delta = finish - begin - net;
+  if (Math.abs(delta) > 0.005) items.push({ name: '未解释变动', v: delta, adjustment: true });
+  return prefix + svgWaterfall(begin, items, finish) + `<div class="note">期初与期末分别取账户最后已知余额，可能早于边界日。同一银行的未补登记录按银行汇总。未解释变动 ${yuan2(delta)} ${esc(currency)}。</div></div>`;
+}
+function burnSummary(e, acc) {
+  const end = (S.snap && S.snap.end) || '';
+  if (!/^\d{4}-\d{2}$/.test(end)) return '<div class="card"><h3>可支撑月数</h3><div class="empty">无法确定基准月份。</div></div>';
+  const [year, month] = end.split('-').map(Number);
+  const list = [3, 2, 1].map(n => { const d = new Date(Date.UTC(year, month - 1 - n, 1)); return d.toISOString().slice(0, 7); });
+  const full = S.full || S.snap;
+  const hist = (full.rows || []).filter(r => r.entity === e && list.includes((r.txn_date || '').slice(0, 7)));
+  const prefix = `<div class="card"><h3>可支撑月数 <span>报告月之前 3 个自然月（${list[0]} 至 ${list[2]}）· 含内部往来</span></h3>`;
+  if ((ENT(e).ccy || 'CNY') !== 'CNY' || (full.pending || 0) || !acc.length || acc.some(a => a.cnyAvail == null) || list.some(m => !hist.some(r => r.txn_date.slice(0, 7) === m))) return prefix + '<div class="empty">历史月份、账户余额、待确认流水或汇率需核对，暂无法计算。</div></div>';
+  const a = agg(hist), burn = Math.max(0, (a.outflow - a.inflow) / 3);
+  const avail = acc.reduce((s, a) => s + a.cnyAvail, 0);
+  const value = avail < 0 ? '资金缺口' : burn === 0 ? '不适用：近 3 月无平均净流出' : (avail / burn).toFixed(1) + ' 个月';
+  return prefix + `<div class="kpi"><div class="v">${esc(value)}</div><span class="s">月均净流出 ${big(burn)} 元 · 固定三个月暂行口径</span></div><div class="note">基于已导入、已确认流水，不能证明流水完整；历史平均不等于未来预测。公司目标月数尚未配置，暂不判断黄绿状态。</div></div>`;
+}
+
+function structureChart(list, bySubject) {
+  const groups = new Map();
+  list.forEach(row => {
+    const activity = flowActivity(row), subject = bySubject ? flowSubject(row) : '';
+    const key = JSON.stringify([activity, subject]);
+    if (!groups.has(key)) groups.set(key, { activity, subject, rows: [] });
+    groups.get(key).rows.push(row);
+  });
+  const values = [...groups.values()].map(group => ({ ...group, ...agg(group.rows) }));
+  const shown = bySubject ? values.sort((a, b) =>
+    Math.abs(b.inflow) + Math.abs(b.outflow) - Math.abs(a.inflow) - Math.abs(a.outflow)).slice(0, 10) : values;
+  if (!shown.length) return '<div class="empty">无数据</div>';
+  const scale = Math.max(1, ...shown.flatMap(x => [Math.abs(x.inflow), Math.abs(x.outflow)]));
+  return `<ul class="structure-chart">${shown.map(item => {
+    const name = item.subject || item.activity;
+    const link = `data-act="structure-drill" data-a="${esc(item.activity)}" data-c="${esc(item.subject)}"`;
+    const label = item.subject && values.some(x => x.activity !== item.activity && x.subject === item.subject)
+      ? `${esc(name)} <small>${esc(item.activity)}</small>` : esc(name);
+    const bar = (value, direction, type, text) => `<button type="button" class="structure-bar ${type}" ${link} data-d="${direction}"
+      aria-label="查看${esc(name)}${text}明细，${yuan2(value)}元">
+      <span class="structure-track" aria-hidden="true"><span style="width:${Math.abs(value) / scale * 100}%"></span></span>
+      <span class="structure-amount">${big(value)}</span></button>`;
+    return `<li class="structure-row"><button type="button" class="structure-label" ${link} data-d="both">${label}</button>
+      <div class="structure-bars">${bar(item.inflow, '收', 'in', '流入')}${bar(item.outflow, '支', 'out', '流出')}</div></li>`;
+  }).join('')}</ul><div class="legend"><span><i style="background:var(--in)"></i>流入</span><span><i style="background:var(--out)"></i>流出</span></div>`;
+}
+
 function paneEntity() {
   const e = S.entity === 'ALL' ? (E()[0] || {}).short : S.entity;
   const all = rows().filter(r => r.entity === e);
   const a = agg(all);
   const intAll = all.filter(isInt);
   const intCnt = intAll.length, intAmt = intAll.reduce((s, r) => s + cny(r), 0);
-  const prev = S.prev ? agg(S.prev.rows.filter(r => r.entity === e)) : null;
+  const prevRows = S.prev ? S.prev.rows.filter(r => r.entity === e) : [];
+  const prev = S.prev && prevRows.length && all.length && !S.prev.pending && !(S.prev.missingFx || []).length && !S.snap.pending && !(S.snap.missingFx || []).length ? agg(prevRows) : null;
   const acc = accountRows().filter(o => o.entity === e);
   const avail = acc.reduce((s, o) => s + (o.cnyAvail || 0), 0);
-  const line = safeLine(e), gap = avail - line;
+  const hasLine = isSafeSet(e), line = hasLine ? safeLine(e) : 0;
+  const hasBalance = acc.length > 0 && acc.every(o => o.cnyAvail != null);
+  const gap = hasLine && hasBalance ? avail - line : null;
   const info = ENT(e);
-  const pend = (S.full ? S.full : S.snap).rows.length ? 0 : 0;
-
-  // 瀑布：期初 → 流入科目 Top5 → 流出科目 Top5 → 期末
-  const inByL2 = Object.entries(grp(all.filter(r => r.direction === '收'), r => r.l2 || '未分类'))
-    .map(([k, v]) => ({ name: k, v: agg(v).inflow })).sort((x, y) => y.v - x.v);
-  const outByL2 = Object.entries(grp(all.filter(r => r.direction === '支'), r => r.l2 || '未分类'))
-    .map(([k, v]) => ({ name: k, v: -agg(v).outflow })).sort((x, y) => x.v - y.v);
-  const topIn = inByL2.slice(0, 5), topOut = outByL2.slice(0, 5);
-  const restIn = inByL2.slice(5).reduce((s, x) => s + x.v, 0);
-  const restOut = outByL2.slice(5).reduce((s, x) => s + x.v, 0);
-  const items = topIn.concat(restIn ? [{ name: '其他流入', v: restIn }] : [])
-    .concat(topOut, restOut ? [{ name: '其他流出', v: restOut }] : []);
-  const endBal = balancesAt(S.snap.end || '');
-  const startBal = { total: endBal.total - a.net, missing: endBal.missing };  // 期初由期末倒推，保证瀑布闭合
-  // 结构：活动类型 × 方向
-  const byAct = ['经营活动', '投资活动', '筹资活动', '内部往来'].map(l1 => {
-    const g = agg(all.filter(r => r.l1 === l1));
-    return { name: l1, a: g.inflow, b: g.outflow };
-  }).filter(x => x.a || x.b);
-
   return `
-  <div class="pane-title"><h2>公司资金透视</h2><span>${esc(info.name || e)} · ${PERIOD_LABEL(S.period)} · 单主体口径：<b>含内部往来</b>（${intCnt} 笔 / ${big(intAmt)}）</span></div>
-  <div class="toolbar">
-    <div class="field"><label>公司</label><select data-act="entity">${entityOptions(e)}</select></div>
-    <div class="field"><label>期间口径</label><select data-act="period">${periodOptions(S.period)}</select></div>
-    <div class="field"><label>安全线（万元）</label><input type="number" step="1" data-act="safe" data-e="${esc(e)}" value="${Math.round(line / 10000)}"></div>
-    <div class="spacer"></div>
-    <div>${gap < 0 ? `<span class="chip pending">低于安全线 缺口 ${big(-gap)}</span>` : `<span class="chip matched">安全垫 ${big(gap)}</span>`}</div>
+  <div class="pane-title dashboard-title"><h2>公司资金透视</h2><span>${esc(info.name || e)} · 已确认流水 · 含内部往来 ${intCnt} 笔 / ${big(intAmt)} 元</span></div>
+  <section class="dashboard-section" aria-labelledby="company-water-heading">
+  <div class="card dashboard-card dashboard-waterline">
+  <div class="dashboard-heading">
+    <div><h3 id="company-water-heading">资金水位与预测</h3><p>公司及分析期间同步更新本页指标</p></div>
+    <div class="chart-filters">
+      ${chartFilter('公司', `<select data-act="entity">${entityOptions(e)}</select>`)}
+      ${chartPeriod()}
+      ${chartFilter('安全线（万元）', `<input type="number" step="1" data-act="safe" data-e="${esc(e)}" value="${Math.round(line / 10000)}">`)}
+    </div>
   </div>
   ${acc.length === 0 && info.pending ? `<div class="banner info"><span class="ic">i</span><div>该主体在样表出现但未进账户主数据，需补登开户行/账号后再接入流水。</div></div>` : ''}
 
   <div class="kpis">
-    ${kpi('可用资金', big(avail), '元', `<span class="s">${acc.length} 个账户</span>`, 'okline')}
+    ${kpi('可用资金', big(avail), '元', periodChange(null, null) + `<span class="s"> · ${acc.length} 个账户</span>`, 'okline')}
     ${kpi('受限资金（自动）', big(acc.reduce((s, o) => s + (o.autoRestricted || 0), 0)), '元',
-      `<span class="s">${(restrictedData().accounts || []).filter(a => a.entity === e).length} 个账户 · 人工补录 ${big(acc.reduce((s, o) => s + o.restricted * (o.fx || 1), 0))}</span>`, 'warnline')}
-    ${kpi('现金流入', big(a.inflow), '元', momHtml(a.inflow, prev && prev.inflow), 'in')}
-    ${kpi('现金流出', big(a.outflow), '元', momHtml(a.outflow, prev && prev.outflow), 'out')}
-    ${kpi('净流量', (a.net >= 0 ? '+' : '−') + big(Math.abs(a.net)), '元', `<span class="s">${a.cnt} 笔</span>`, a.net >= 0 ? 'in' : 'out')}
-    ${kpi('可用余额（单列）', big(avail), '元', momHtml(avail, availOf(S.prev)))}
+      periodChange(null, null) + `<span class="s"> · ${(restrictedData().accounts || []).filter(a => a.entity === e).length} 个账户 · 人工补录 ${big(acc.reduce((s, o) => s + o.restricted * (o.fx || 1), 0))}</span>`, 'warnline')}
+    ${kpi('现金流入', big(a.inflow), '元', periodChange(a.inflow, prev && prev.inflow), 'in')}
+    ${kpi('现金流出', big(a.outflow), '元', periodChange(a.outflow, prev && prev.outflow), 'out')}
+    ${kpi('净流量', (a.net >= 0 ? '+' : '−') + big(Math.abs(a.net)), '元', periodChange(a.net, prev && prev.net) + `<span class="s"> · ${a.cnt} 笔</span>`, a.net >= 0 ? 'in' : 'out')}
+    ${kpi('安全垫 / 缺口', gap == null ? '—' : (gap >= 0 ? '+' : '−') + big(Math.abs(gap)), '元', gap == null ? '<span class="s">安全线或账户余额待核对</span>' : periodChange(null, null) + '<span class="s"> · 可用资金 − 安全线</span>', gap != null && gap < 0 ? 'out' : '')}
   </div>
 
   ${(() => {
-    const wl = waterline(e, 8);
+    const wl = waterline(e, 8, S.snap.end);
     const nA = wl.act.filter(v => v != null).length, nF = wl.future.length;
     const net3 = wl.net3;
     const fmt = v => (v == null ? '—' : (v >= 0 ? '+' : '−') + big(Math.abs(v)));
     const below = wl.minLevel != null && line > 0 && wl.minLevel < line;
-    return `<div class="card" style="margin-bottom:12px">
-      <h3>未来三个月资金水位推算 <span>${wl.months[0] || '—'} ~ ${wl.months[wl.months.length - 1] || '—'}（实际 ${nA} 期 + 预测 ${nF} 期）</span></h3>
-      ${wl.months.length ? svgWaterline(wl.months, wl.act, wl.fc, line) : '<div class="empty">尚无余额数据</div>'}
-      <div class="kpis" style="grid-template-columns:repeat(4,1fr);margin:10px 0 8px">
-        ${kpi('当前可用', big(avail), '元', '<span class="s">末笔余额 − 受限资金</span>', 'okline')}
-        ${kpi('未来三月净流入', fmt(net3), '元', `<span class="s">达成率 ${(wl.k * 100).toFixed(0)}%${wl.extrapolated ? ' · 含历史外推' : ''}</span>`, net3 >= 0 ? 'in' : 'out')}
+    return `<div class="waterline-plot">
+      <h3>未来三个月资金水位推算 <span>${wl.months[0] || '—'} 至 ${wl.months[wl.months.length - 1] || '—'} · 实际 ${nA} 期 + 预测 ${nF} 期</span></h3>
+      <div class="chips" style="margin:8px 0">${wl.future.map((m, i) => `<span class="chip ${wl.planFlags[i] ? 'matched' : 'pending'}">${esc(m)} · ${wl.planFlags[i] ? '已审批计划' : '缺计划 / 历史外推'}</span>`).join('')}</div>
+      ${nA ? svgWaterline(wl.months, wl.act, wl.fc, line) : '<div class="empty">所选期间缺少可用于预测的余额</div>'}
+      <div class="kpis forecast-kpis">
+        ${kpi('未来三月净流入', fmt(nF ? net3 : null), '元', nF ? `<span class="s">达成率 ${(wl.k * 100).toFixed(0)}%${wl.extrapolated ? ' · 含历史外推' : ''}</span>` : '<span class="s">待补余额</span>', nF ? net3 >= 0 ? 'in' : 'out' : '')}
         ${kpi('三个月最低水位', wl.minLevel == null ? '—' : big(wl.minLevel), '元', `<span class="s">${wl.minMonth ? wl.minMonth + ' 末' : '无预测'}</span>`, below ? 'warnline' : '')}
         ${kpi('覆盖月数', wl.cover == null ? '—' : wl.cover.toFixed(1), '个月', `<span class="s">按近 3 个月月均支出</span>`, wl.cover != null && wl.cover < 3 ? 'warnline' : '')}
       </div>
-      <div class="note">
+      ${nA ? `<div class="note">
         <b>推算</b>：当前可用 ${big(avail)} + 未来三个月净流入 ${fmt(net3)}；
         有计划月按「已审批计划净流入 × 达成率 ${(wl.k * 100).toFixed(0)}%」${wl.planFlags.some(f => !f) ? '，无计划月按近 3 个月实际净流入月均外推（已标注）' : ''}；
-        安全线 ${(line / 1e4).toFixed(1)} 万。
-        <br>${esc(wl.kNote)}。
+        安全线 ${hasLine ? (line / 1e4).toFixed(1) + ' 万' : '尚未设置'}。
+        <br>历史水位按所选期间期末的受限金额估算。${esc(wl.kNote)}。
         ${wl.minLevel == null ? '' : `预测段最低水位 <b>${big(wl.minLevel)}</b>（${wl.minMonth} 末）${wl.weekMin ? `，逐周最低 <b>${big(wl.weekMin.v)}</b>（${wl.weekMin.m} 第 ${wl.weekMin.w} 周）` : ''}。`}
         ${wl.breachMonth ? `<b class="out">预计 ${wl.breachMonth} 末跌破安全线</b>，建议提前安排融资或压缩支出。`
-          : (wl.minLevel == null ? '' : '未来三个月各月末水位均在安全线之上。')}
+          : (!hasLine || wl.minLevel == null ? '' : '未来三个月各月末水位均在安全线之上。')}
         ${wl.extrapolated ? '<br><b>提示：</b>标注「历史外推」的月份没有已审批计划，按近 3 个月实际净流入外推，仅供预警参考；计划审批后自动切换为计划口径。' : ''}
-      </div>
+      </div>` : ''}
     </div>`;
   })()}
+  </div>
+  </section>
 
+  <section class="dashboard-section" aria-labelledby="company-flow-heading">
+  <div class="dashboard-heading"><h3 id="company-flow-heading">收支趋势与结构</h3></div>
+  <section class="card dashboard-card company-monthly"><h3>月度现金流入 / 流出</h3>${overviewChartBody('flow', e)}</section>
+  ${entityWaterfall(e)}
+  <div class="grid g2 dashboard-pair">
+    <div class="card dashboard-card"><h3>收支结构 · 按活动类型 <span>点击活动或柱条查看明细</span></h3>${structureChart(all, false)}</div>
+    <div class="card dashboard-card"><h3>科目结构 Top10 <span>点击科目或柱条查看明细</span></h3>${structureChart(all, true)}</div>
+  </div>
+  </section>
+
+  <section class="dashboard-section" aria-labelledby="company-bank-heading">
+  <div class="dashboard-heading"><h3 id="company-bank-heading">银行与可用资金</h3></div>
+  ${bankDistribution(e, all, acc)}
+  ${burnSummary(e, acc)}
   ${restrictedCard(info.name || e, e)}
-
-  <div class="card" style="margin-bottom:12px"><h3>逐月收支结构瀑布 <span>期初 → 按二级科目 → 期末</span></h3>
-    ${items.length ? svgWaterfall(startBal.total, items, endBal.total) : '<div class="empty">本期无流水</div>'}
-    <div class="note">期初 ${big(startBal.total)} 元 → 期末 ${big(endBal.total)} 元。
-      ${(startBal.missing || []).length || (endBal.missing || []).length ? `<b>汇率缺失：</b>${esc(Array.from(new Set((startBal.missing || []).concat(endBal.missing || []))).join('、'))}，其账户未计入合计。` : ''}</div>
-  </div>
-
-  <div class="grid g2">
-    <div class="card"><h3>收支结构 · 按活动类型 <span>经营 / 投资 / 筹资</span></h3>
-      ${byAct.length ? svgPair(byAct) : '<div class="empty">无数据</div>'}</div>
-    <div class="card"><h3>科目结构 Top10 <span>二级科目</span></h3>
-      ${(() => {
-        const m = Object.entries(grp(all, r => (r.l2 || '未分类'))).map(([k, v]) => { const g = agg(v); return { name: k, a: g.inflow, b: g.outflow }; }).sort((x, y) => (y.a + y.b) - (x.a + x.b)).slice(0, 10);
-        return m.length ? svgPair(m) : '<div class="empty">无数据</div>';
-      })()}</div>
-  </div>
-
-  <div class="grid g2">
-    <div class="card"><h3>账户余额 <span>${esc(e)} · 可用 = 余额 − 自动受限 − 人工补录</span></h3>
-      ${acc.length ? `<table class="tbl"><thead><tr><th>银行</th><th>账号</th><th class="num">末笔余额</th><th class="num">自动受限</th><th class="num">可用</th><th>时点</th></tr></thead><tbody>
-        ${acc.map(o => `<tr><td>${esc(o.bank)}</td><td class="mono">${esc(o.account || '待补登')}</td>
-          <td class="num">${o.balance == null ? '—' : yuan2(o.balance)}</td>
-          <td class="num ${o.autoRestricted ? 'out' : 'sub'}">${o.autoRestricted ? yuan2(o.autoRestricted) : '—'}</td>
-          <td class="num">${o.available == null ? '—' : yuan2(o.available)}</td>
-          <td class="mini">${esc(o.date || '—')}</td></tr>`).join('')}
-        <tr class="total"><td colspan="2">合计</td><td class="num">${yuan2(acc.reduce((s, o) => s + (o.balance || 0), 0))}</td><td class="num">${yuan2(acc.reduce((s, o) => s + (o.autoRestricted || 0), 0))}</td><td class="num">${yuan2(acc.reduce((s, o) => s + (o.available || 0), 0))}</td><td></td></tr>
-      </tbody></table>` : '<div class="empty">无账户</div>'}</div>
-    <div class="card"><h3>本期计划 <span>${PERIOD_LABEL(S.period)}</span></h3>
-      ${(() => {
-        const ps = plans().filter(p => p.entity === e);
-        if (!ps.length) return '<div class="empty"><div class="t">本期没有已审批计划</div>到「资金计划编制」提交并审批后参与预实。</div>';
-        const pa = { in: ps.filter(p => p.direction === '流入').reduce((s, p) => s + p.amount, 0), out: ps.filter(p => p.direction === '流出').reduce((s, p) => s + p.amount, 0) };
-        return `<table class="tbl"><thead><tr><th>方向</th><th>科目</th><th class="num">金额</th></tr></thead><tbody>
-          ${ps.slice(0, 12).map(p => `<tr><td>${p.direction}</td><td>${esc(p.l2)}</td><td class="num">${yuan(p.amount)}</td></tr>`).join('')}
-          <tr class="total"><td colspan="2">合计</td><td class="num">流入 ${big(pa.in)} / 流出 ${big(pa.out)}</td></tr></tbody></table>`;
-      })()}</div>
-  </div>`;
+  </section>`;
 }
 function shiftMonth(m, delta) {
   const d = new Date(m + '-01'); d.setMonth(d.getMonth() + delta);
@@ -729,6 +957,31 @@ function batchChip(x) {
   if (x.status === 'superseded') return '<span class="chip">已被变更</span>';
   if (x.status === 'draft') return '<span class="chip">草稿</span>';
   return `<span class="chip pending">待确认${x.n_pending ? ` ${x.n_pending} 笔` : ''}</span>`;
+}
+
+/* 冲减（不挂原笔）：冲减后记到「反方向」，候选科目是该行取反方向的二级科目（跨一级，按 l1 分组） */
+function offsetGroups(dir) {
+  const want = dir === '收' ? '支' : '收';
+  const g = new Map();
+  SUBMAP().filter(s => (s.direction === '双向' || s.direction === want))
+    .sort((a, b) => (a.sort || 0) - (b.sort || 0) || String(a.code).localeCompare(String(b.code)))
+    .forEach(s => {
+      if (!g.has(s.l1)) g.set(s.l1, []);
+      const arr = g.get(s.l1);
+      if (!arr.some(x => x.l2 === s.l2)) arr.push(s);   // 冲减只按二级科目，线上/线下等细分不区分
+    });
+  return Array.from(g.entries());
+}
+/* 冲减选项文案：二级 + 细分（细分才能区分「其他支出」下的 B06/B07/B99 等） */
+/* 冲减选项文案：只到二级科目（细分科目不在冲减里区分） */
+function offLabel(s) {
+  return esc(s.l2);
+}
+/* 该行冲减状态（含未保存的下拉选择优先于库值） */
+function offsetOf(r) {
+  const p = S.pick[r.id] || {};
+  const on = ('offset' in p) ? !!p.offset : !!(r.offset_of || 0);
+  return { on: on, code: (p.code || r.code || '') };
 }
 
 function paneFlow() {
@@ -750,7 +1003,7 @@ function paneFlow() {
       ${locked ? `<button class="btn ghost" data-act="step" data-step="2">查看本批记录</button>` : ''}
       <button class="btn ghost ${b.id ? '' : 'off'}" data-act="new-application" ${b.id ? '' : 'disabled'} title="清空当前申请，重新选公司/期间导入">新建申请</button>
       ${locked ? '' : `<button class="btn ${ready ? '' : 'off'}" data-act="pickFlow" ${ready ? '' : 'disabled'}>导入流水</button>`}
-      <input type="file" id="fileFlow" accept=".xlsx,.xls,.csv,.txt" multiple class="hide">
+      <input type="file" id="fileFlow" accept=".xlsx,.xls,.csv,.txt,.pdf" multiple class="hide">
     </div>
     ${locked
       ? `<div class="banner ok" style="margin-top:10px"><span class="ic">✓</span><div>该批次已确认并写入数仓${b.confirmed_at || b.updated_at ? `（${esc(String(b.confirmed_at || b.updated_at).slice(0, 19))}）` : ''}，申请层面只读；改数请进「人工识别」用已确认记录的<b>修改</b>。</div></div>`
@@ -789,10 +1042,17 @@ function paneFlow() {
       ${list.length ? `
       <div class="scroll tall"><table class="tbl"><thead><tr>
         <th>记录时间</th><th>银行</th><th>对方 / 摘要</th><th class="num">金额</th><th>方向</th>
-        <th style="width:112px">一级科目</th><th style="width:200px">二级科目</th><th>状态</th></tr></thead><tbody>
-        ${list.slice(0, 600).map(r => {
-      const p = pickOf(r), l1 = l1OfRow(r);
-      const subs = SUB_OPTS(l1).filter(s => l1 === '内部往来' || s.direction === r.direction || s.direction === '双向');
+        <th style="width:112px">一级科目</th><th style="width:190px">二级科目</th><th style="width:132px">冲减</th><th>状态</th></tr></thead><tbody>
+    ${list.slice(0, 600).map(r => {
+      const p = pickOf(r), l1 = l1OfRow(r), off = offsetOf(r);
+      const wantDir = off.on ? (r.direction === '收' ? '支' : '收') : r.direction;
+      const subs = off.on
+        ? offsetGroups(r.direction).flatMap(([, arr]) => arr).filter(s => s.l1 === l1)
+        : SUB_OPTS(l1).filter(s => l1 === '内部往来' || s.direction === r.direction || s.direction === '双向');
+      const sug = r.offset_suggest || '';
+      const groups = offsetGroups(r.direction).map(([g1, arr]) => [g1, arr.slice().sort(
+        (a, b) => (a.code === sug ? -1 : b.code === sug ? 1 : 0))]);
+      const offHit = off.on && !groups.some(([, arr]) => arr.some(s => s.code === off.code));
       return `<tr class="${r.status === 'confirmed' ? '' : r.modified ? 'picked' : ''}">
           <td class="r">${esc(r.txn_date)}${r.txn_time ? `<div class="mini">${esc(r.txn_time)}</div>` : ''}</td>
           <td class="sub">${esc(r.bank || '—')}</td>
@@ -805,12 +1065,24 @@ function paneFlow() {
           </select></td>
           <td><select class="subj" data-code="${r.id}">
             <option value="">${l1 ? '未指定…' : '先选一级科目…'}</option>
-            ${subs.map(s => `<option value="${s.code}" ${p.code && (smByCode(p.code) || {}).l2 === s.l2 ? 'selected' : ''}>${esc(s.l2)}</option>`).join('')}
+            ${subs.map(s => `<option value="${s.code}" ${p.code && (s.code === p.code || (!off.on && (smByCode(p.code) || {}).l2 === s.l2)) ? 'selected' : ''}>${off.on ? offLabel(s) : esc(s.l2)}</option>`).join('')}
           </select></td>
+          <td>${S.offOpen.has(r.id)
+            ? `<select class="subj" data-offset="${r.id}" title="按二级科目冲减：看板按反方向 −金额 抵减">
+                 <option value="">取消冲减 / 不冲减</option>
+                 ${groups.map(([g1, arr]) => `<optgroup label="${L1_SHORT[g1] || g1}">${arr.map(s =>
+                   `<option value="${s.code}" ${off.on && off.code === s.code ? 'selected' : ''}>${offLabel(s)}${s.code === sug ? '（推测）' : ''}</option>`).join('')}</optgroup>`).join('')}
+                 ${offHit ? `<option value="${off.code}" selected>${esc((smByCode(off.code) || {}).l2 || off.code)}（当前）</option>` : ''}
+               </select>`
+            : off.on
+              ? `<span class="chip manual" title="看板按反方向 −金额 抵减">冲减 · ${esc((smByCode(off.code) || {}).l2 || off.code)}</span>
+                 <button class="btn ghost sm" data-act="off-open" data-id="${r.id}" title="换冲减科目">改</button>
+                 <button class="btn ghost sm" data-act="off-clear" data-id="${r.id}" title="取消冲减">×</button>`
+              : `<button class="btn ghost sm" data-act="off-open" data-id="${r.id}" title="按二级科目冲减：不挂原笔，反方向「−金额」抵减">冲减…</button>${sug ? `<div class="mini">推测：${esc((smByCode(sug) || {}).l2 || sug)}</div>` : ''}`}</td>
           <td>${r.status === 'confirmed'
           ? '<span class="chip matched">已确认</span>'
           : r.modified ? '<span class="chip pending">未确认（已修改）</span>'
-            : (ident(r) ? '<span class="chip">已识别 · 待确认</span>' : '<span class="chip pending">未识别</span>')}</td></tr>`;
+            : (ident(r) ? '<span class="chip">已识别 · 待确认</span>' : '<span class="chip pending">未识别</span>')}${off.on ? ' <span class="chip manual" title="看板按反方向 −金额 抵减">冲减</span>' : ''}${r.status !== 'confirmed' && r.confidence && /需人工确认/.test(r.confidence) ? `<div class="mini">${esc(r.confidence)}</div>` : ''}</td></tr>`;
     }).join('')}
       </tbody></table></div>` : `<div class="empty"><div class="t">${filter === 'un' ? '本批没有未识别记录' : filter === 'id' ? '本批还没有已识别记录' : '本批没有记录'}</div>
         ${filter === 'un' ? '全部记录都已指定科目，可直接「全部确认」。' : '切换上方筛选查看其他记录。'}</div>`}
@@ -829,7 +1101,7 @@ function paneFlow() {
       <div class="scroll"><table class="tbl"><thead><tr><th>记录时间</th><th>银行</th><th>对方</th><th class="num">金额</th><th>一级</th><th>二级</th><th>来源</th><th></th></tr></thead><tbody>
         ${(S.confirmedRows || []).slice(0, 80).map(r => `<tr>
           <td class="r">${esc(r.txn_date)}</td><td class="sub">${esc(r.bank || '')}</td><td>${esc((r.counterparty || '—').slice(0, 16))}</td>
-          <td class="num">${yuan(r.amount)}</td><td class="sub">${esc(L1_SHORT[l1Of(r)] || l1Of(r) || '')}</td><td class="sub">${esc(r.l2 || '')}</td>
+<td class="sub">${esc(r.l2 || '')}${r.offset_of ? ' <span class="chip manual">冲减</span>' : ''}</td>
           <td>${r.matched_by === 'manual' ? '<span class="chip manual">人工</span>' : '<span class="chip matched">规则</span>'}</td>
           <td><button class="btn ghost sm" data-act="edit-flow" data-id="${r.id}">修改</button></td></tr>`).join('') || '<tr><td colspan="8" class="empty">暂无</td></tr>'}
       </tbody></table></div>
@@ -854,6 +1126,7 @@ function paneFlow() {
       </div>
       ${(S.parse.dupRows || []).length ? `<div class="note"><b>库内重复（已跳过）：</b>${S.parse.dupRows.slice(0, 8).map(d => `第 ${d.row} 行 ${d.date} ${yuan(d.amount)}`).join('；')}${S.parse.dupRows.length > 8 ? ' …' : ''}</div>` : ''}
       ${(S.parse.dupInFile || []).length ? `<div class="note"><b>文件内重复（已标记）：</b>${S.parse.dupInFile.slice(0, 6).map(d => `第 ${d.row} 行 与第 ${d.first} 行相同`).join('；')}</div>` : ''}
+      ${(S.parse.errors || []).length ? `<div class="banner warn"><span class="ic">!</span><div>${S.parse.errors.map(esc).join('<br>')}</div></div>` : ''}
       <div class="flexrow" style="margin-top:10px">
         <button class="btn" data-act="step" data-step="2">${curBatch && curBatch.status === 'confirmed' ? '查看本批记录（已确认）' : `下一步：人工识别（${curBatch ? curBatch.n_pending : (S.meta.counts.pending + S.meta.counts.draft)} 笔待处理）`} →</button>
         <span class="mini">已逐笔落库：命中规则=已确认，未命中=待确认</span>
@@ -981,75 +1254,44 @@ function panePlan() {
   </div>`;
 }
 
-/* ---------- 3.1 资金穿透（活动类型 → 收支分类 → 三级穿透明细） ---------- */
-function svgPlanActual(months, acts, plans, w) {
-  w = w || 640; const h = 240, pl = 52, pr = 12, pt = 26, pb = 34;
-  const iw = w - pl - pr, ih = h - pt - pb;
-  const max = Math.max(1, ...acts.map(Math.abs), ...plans.map(Math.abs));
-  const step = iw / Math.max(months.length, 1), bw = Math.min(12, step / 3.6);
-  const zero = pt + ih / 2, sc = (ih / 2) / max;
-  const y = v => zero - v * sc;
-  let g = '', lab = '', bars = '', xl = '';
-  for (let i = 0; i <= 4; i++) {
-    const v = max * (i - 2) / 2, yy = y(v);
-    g += `<line x1="${pl}" y1="${yy}" x2="${w - pr}" y2="${yy}" stroke="${v === 0 ? '#D8DEE9' : '#EDF0F5'}"/>`;
-    lab += `<text x="${pl - 8}" y="${yy + 3.5}" text-anchor="end" font-size="10" fill="#9CA3AF">${big(v)}</text>`;
-  }
-  months.forEach((m, i) => {
-    const cx = pl + step * i + step / 2;
-    const draw = (v, dx, color) => {
-      const y0 = y(Math.max(0, v)), y1 = y(Math.min(0, v));
-      bars += `<rect x="${cx + dx}" y="${y0}" width="${bw}" height="${Math.max(1, y1 - y0)}" fill="${color}" rx="1"/>`;
-      // 柱顶/柱底金额 label（月份过多时省略，避免重叠）
-      if (v && months.length <= 8) {
-        const ty = v > 0 ? y0 - 4 : y1 + 11;
-        bars += `<text x="${cx + dx + bw / 2}" y="${ty}" text-anchor="middle" font-size="9" fill="${color}">${big(v)}</text>`;
-      }
-    };
-    draw(acts[i], -bw - 1, '#1F3864');
-    draw(plans[i], 1, '#C9A227');
-    xl += `<text x="${cx}" y="${h - 10}" text-anchor="middle" font-size="10" fill="#6B7280">${Number(m.slice(5))}月</text>`;
-  });
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">${g}${lab}${bars}${xl}</svg>
-    <div class="legend"><span><i style="background:#1F3864"></i>实际</span><span><i style="background:#C9A227"></i>计划</span></div>`;
-}
+/* ---------- 3.1 资金下钻 ---------- */
 
 function paneDrill() {
   const all = rows(), allPlans = plans();
-  const ACTS0 = Array.from(new Set(SUBMAP().map(s => s.l1)));
+  const ACTS0 = [...new Set([...SUBMAP().map(s => s.l1), ...all.map(flowActivity), ...allPlans.map(flowActivity)])];
   const ACTS = L1_LIST.filter(x => ACTS0.includes(x)).concat(ACTS0.filter(x => !L1_LIST.includes(x)));
   const act = (S.drillAct && ACTS.includes(S.drillAct)) ? S.drillAct
     : (ACTS.includes('经营活动') ? '经营活动' : (ACTS[0] || '经营活动'));
-  const subs = Array.from(new Map(SUBMAP().filter(s => s.l1 === act)
-    .sort((a, b) => (a.sort || 0) - (b.sort || 0) || String(a.code).localeCompare(String(b.code)))
-    .map(s => [s.l2, s])).values());
-  const cat = S.drillCat || '';
+  const mapped = SUBMAP().filter(s => s.l1 === act)
+    .sort((a, b) => (a.sort || 0) - (b.sort || 0) || String(a.code).localeCompare(String(b.code)));
+  const subs = [...new Set([...mapped, ...all.filter(r => flowActivity(r) === act),
+    ...allPlans.filter(r => flowActivity(r) === act)].map(flowSubject))];
+  const cat = subs.includes(S.drillCat) ? S.drillCat : '';
   const srcSel = S.drillSrc || '';
   const dir = S.drillDir2 || 'both';
-  const month = 'ALL';   // 时间口径统一由页面顶部「期间」决定，下钻层不再单独筛月份
   const thr = Number(S.drillAmt || 0);
-  const months = (S.snap && S.snap.allMonths) ? S.snap.allMonths : [];
+  const months = monthsInSnap();
 
   // 实际：与「收支明细 / 预实分析」同口径 —— 只认已确认流水，金额折人民币
-  const l2Of = r => r.l2 || (smByCode(r.code) || {}).l2 || '未分类';
-  const actRows = all.filter(r => (r.l1 || l1Of(r)) === act && (!cat || l2Of(r) === cat))
+  const activityRows = all.filter(r => flowActivity(r) === act)
     .map(r => ({
       date: r.txn_date || '', period: (r.txn_date || '').slice(0, 7), dir: r.direction,
-      cat: l2Of(r), cp: r.counterparty || '', l1: r.l1 || l1Of(r), amt: cny(r)
+      cat: flowSubject(r), cp: r.counterparty || '', l1: flowActivity(r), amt: cny(r), off: !!(r.is_offset || r.offset_of)
     }));
   // 计划：已审批计划明细
-  const planRows = allPlans.filter(x => x.l1 === act && (!cat || (x.l2 || '未分类') === cat))
+  const activityPlans = allPlans.filter(x => flowActivity(x) === act)
     .map(x => ({
       date: x.period || '', period: x.period || '', dir: x.direction === '流入' ? '收' : '支',
-      cat: x.l2 || '未分类', cp: '', l1: x.l1, amt: Number(x.amount || 0)
+      cat: flowSubject(x), cp: '', l1: flowActivity(x), amt: Number(x.amount || 0)
     }));
+  const actRows = activityRows.filter(r => !cat || r.cat === cat);
+  const planRows = activityPlans.filter(r => !cat || r.cat === cat);
   // 数据源：未手动选择时，只有计划、没有已确认流水的公司自动展示计划（避免看起来「没数据」）
   const src = srcSel === 'plan' ? 'plan' : srcSel === 'actual' ? 'actual'
     : ((!actRows.length && planRows.length) ? 'plan' : 'actual');
   const autoPlan = !srcSel && src === 'plan';
   const base = src === 'plan' ? planRows : actRows;
-  const list = base.filter(r => (month === 'ALL' || r.period === month)
-    && (dir === 'both' || r.dir === dir) && Math.abs(r.amt) >= thr)
+  const list = base.filter(r => (dir === 'both' || r.dir === dir) && Math.abs(r.amt) >= thr)
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const sum = f => list.filter(f).reduce((s, r) => s + r.amt, 0);
   const cnt = f => list.filter(f).length;
@@ -1058,81 +1300,102 @@ function paneDrill() {
 
   const monthList = months.length ? months
     : Array.from(new Set([].concat(actRows.map(r => r.period), planRows.map(r => r.period)))).filter(Boolean).sort();
-  const aSeries = monthList.map(m => actRows.filter(r => r.period === m).reduce((s, r) => s + (r.dir === '收' ? r.amt : -r.amt), 0));
-  const pSeries = monthList.map(m => planRows.filter(r => r.period === m).reduce((s, r) => s + (r.dir === '收' ? r.amt : -r.amt), 0));
-  const sumA = aSeries.reduce((s, v) => s + v, 0), sumP = pSeries.reduce((s, v) => s + v, 0);
-  const lab = m => Number(m.slice(5)) + '月';
-  const aMonths = Array.from(new Set(actRows.map(r => r.period))).sort();
-  const pMonths = Array.from(new Set(planRows.map(r => r.period))).sort();
-
-  const srcRows = src === 'plan' ? planRows : actRows;
+  const monthlyNet = list => {
+    const values = new Map();
+    list.forEach(r => values.set(r.period, (values.get(r.period) || 0) + (r.dir === '收' ? r.amt : -r.amt)));
+    return monthList.map(m => values.get(m) ?? null);
+  };
+  const aSeries = monthlyNet(actRows), pSeries = monthlyNet(planRows);
+  const total = series => series.some(Number.isFinite) ? series.reduce((s, v) => s + (v ?? 0), 0) : null;
+  const sumA = total(aSeries), sumP = total(pSeries);
+  const srcRows = src === 'plan' ? activityPlans : activityRows;
   const catChips = [{ l2: '', amt: srcRows.reduce((s, r) => s + Math.abs(r.amt), 0) }]
-    .concat(subs.map(s => ({
-      l2: s.l2,
-      amt: srcRows.filter(r => r.cat === s.l2).reduce((a, r) => a + Math.abs(r.amt), 0)
+    .concat(subs.map(l2 => ({
+      l2,
+      amt: srcRows.filter(r => r.cat === l2).reduce((a, r) => a + Math.abs(r.amt), 0)
     })));
   const catTitle = cat || '全部收支';
+  const displayed = list.slice(0, 200);
 
   return `
-  <div class="pane-title"><h2>资金穿透</h2><span>活动类型 → 收支分类 → 三级穿透明细（实际取已确认流水，计划取已审批计划）</span></div>
-  <div class="toolbar">
-    <div class="field"><label>公司</label><select data-act="entity">${entityOptions(S.entity, '集团合计')}</select></div>
-    <div class="field"><label>期间口径</label><select data-act="period">${periodOptions(S.period)}</select></div>
-    <div class="spacer"></div>
-    <span class="mini">${esc(act)} · 实际 ${actRows.length} 笔 / 计划 ${planRows.length} 行</span>
-  </div>
-  ${autoPlan ? `<div class="banner info" style="margin:0 0 12px"><span class="ic">i</span><div>该公司暂无已确认流水，已自动展示<b>已审批计划</b>（${planRows.length} 行）；可在右侧「数据源」切回实际流水。</div></div>` : ''}
-
-  <div class="card" style="margin-bottom:12px">
-    <h3>① 资金方向（活动类型） <span>取映射表 l1，不在前端二次判断</span></h3>
-    <div class="chips">
-      ${ACTS.map(a => `<button class="chipbtn ${a === act ? 'on' : ''}" data-act="drill-act" data-a="${esc(a)}">${esc(a)}</button>`).join('') || '<span class="mini">映射表为空</span>'}
-    </div>
-    <h3 style="margin-top:16px">② 按二级科目分类 <span>${esc(act)} · ${subs.length} 个二级科目 · 金额按当前数据源（${src === 'plan' ? '计划' : '实际流水'}，绝对值）</span></h3>
-    <div class="chips">
-      ${catChips.map(c => `<button class="chipbtn ${cat === c.l2 ? 'on' : ''}" data-act="drill-cat" data-c="${esc(c.l2)}" title="${esc(c.l2 || '全部收支')}">${esc(c.l2 || '全部')}<span class="mini"> ${big(c.amt)}</span></button>`).join('')}
-    </div>
-  </div>
-
-  <div class="grid g32">
-    <div class="card"><h3>${esc(catTitle)} · 计划 vs 实际 <span>元</span></h3>
-      ${monthList.length ? svgPlanActual(monthList, aSeries, pSeries) : '<div class="empty">暂无数据</div>'}
-      <div class="note">实际（${aMonths.length ? aMonths.map(lab).join('/') : '—'}）合计 <b>${big(sumA)}</b> 元；
-        计划（${pMonths.length ? pMonths.map(lab).join('/') : '—'}）合计 <b>${big(sumP)}</b> 元。<br>
-        口径：实际 = 已确认流水（规则已匹配 + 人工确认），计划 = 已审批计划；按映射表 l2 归集，内部往来在集团口径按 <code>group_elim</code> 抵销。</div>
-    </div>
-
-    <div class="card"><h3>三级穿透 · 打标明细 <span>与「收支明细」同口径 · ${esc(PERIOD_LABEL(S.period))} · ${dir === 'both' ? '收+支' : dir === '收' ? '流入' : '流出'} · 共 ${list.length} 条</span></h3>
-      <div class="flexrow" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
-        <select data-act="drill-dir2sel" class="mini" title="收支方向（作用于下钻明细）">
-          <option value="both"${dir === 'both' ? ' selected' : ''}>收支方向：全部</option>
-          <option value="收"${dir === '收' ? ' selected' : ''}>收支方向：流入</option>
-          <option value="支"${dir === '支' ? ' selected' : ''}>收支方向：流出</option>
-        </select>
-        <select data-act="drill-catsel" class="mini"><option value="">全部分类</option>
-          ${subs.map(s => `<option value="${esc(s.l2)}"${cat === s.l2 ? ' selected' : ''}>${esc(s.l2)}</option>`).join('')}</select>
-        <select data-act="drill-srcsel" class="mini">
-          <option value="actual"${src === 'actual' ? ' selected' : ''}>实际流水</option>
-          <option value="plan"${src === 'plan' ? ' selected' : ''}>计划</option>
-        </select>
-        <label class="mini" style="display:flex;align-items:center;gap:6px">金额≥
-          <input type="range" data-act="drill-amt" min="0" max="${Math.ceil(maxAmt)}" step="1000" value="${thr}" style="width:110px">
-          <b data-amt-lab>${big(thr)}</b></label>
+  <div class="pane-title dashboard-title"><h2>资金下钻</h2><span>${esc(S.entity === 'ALL' ? '集团合计' : S.entity)} · ${esc(PERIOD_LABEL(S.period))}</span></div>
+  <div class="drill-layout">
+  <section class="card dashboard-card drill-selection" aria-labelledby="drill-scope-heading">
+    <div class="dashboard-heading">
+      <h3 id="drill-scope-heading">分析范围</h3>
+      <div class="chart-filters">
+        ${chartFilter('公司', `<select data-act="entity">${entityOptions(S.entity, '集团合计')}</select>`)}
+        ${chartPeriod()}
       </div>
-      ${list.length ? `<div class="scroll tall"><table class="tbl"><thead><tr><th>日期</th><th>方向</th><th>分类</th><th>对方户名</th><th>科目</th><th class="num">金额</th></tr></thead><tbody>
-        ${list.slice(0, 200).map(r => `<tr>
+    </div>
+    <div class="drill-selector-row">
+      <h4 id="drill-activity-heading">活动类型</h4>
+      <div class="chips" role="group" aria-labelledby="drill-activity-heading">
+        ${ACTS.map(a => `<button type="button" class="chipbtn ${a === act ? 'on' : ''}" aria-pressed="${a === act}" data-act="drill-act" data-a="${esc(a)}">${esc(a)}</button>`).join('') || '<span class="mini">暂无活动类型</span>'}
+      </div>
+    </div>
+    <div class="drill-selector-row">
+      <h4 id="drill-category-heading">二级科目 <span>${src === 'plan' ? '计划金额' : '实际金额'}</span></h4>
+      <div class="chips" role="group" aria-labelledby="drill-category-heading">
+        ${catChips.map(c => `<button type="button" class="chipbtn ${cat === c.l2 ? 'on' : ''}" aria-pressed="${cat === c.l2}" data-act="drill-cat" data-c="${esc(c.l2)}">${esc(c.l2 || '全部')} <span class="n">${big(c.amt)}</span></button>`).join('')}
+      </div>
+    </div>
+  </section>
+
+  <section class="card dashboard-card drill-main-chart" aria-labelledby="drill-chart-heading">
+    <div class="dashboard-heading">
+      <div><h3 id="drill-chart-heading">${esc(catTitle)} · 计划 vs 实际</h3><p>${esc(act)} · 按月净额 · 人民币（元）</p></div>
+      <a class="drill-detail-link" href="#drill-details">查看三级明细 ↓</a>
+    </div>
+    <div class="drill-totals">
+      <span><i class="drill-actual-key"></i>实际净额 <strong>${big(sumA)}</strong></span>
+      <span><i class="drill-plan-key"></i>计划净额 <strong>${big(sumP)}</strong></span>
+    </div>
+    ${sumA != null || sumP != null ? svgMonthlyChart(monthList, [
+      { label: '实际', color: 'var(--navy)', values: aSeries },
+      { label: '计划', color: 'var(--forecast)', values: pSeries }
+    ], { bars: true, valueLabels: true, title: catTitle + '按月计划与实际' }) : '<div class="empty">所选范围暂无可展示的计划或实际</div>'}
+    <div class="note">实际取已确认流水，计划取已审批计划。无记录的月份在对应序列留空。</div>
+    ${sumA != null || sumP != null ? `<details class="chart-data"><summary>查看月度数值</summary>
+      <div class="scroll"><table class="tbl"><thead><tr><th>月份</th><th class="num">实际（元）</th><th class="num">计划（元）</th></tr></thead>
+      <tbody>${monthList.map((m, i) => `<tr><td>${esc(m)}</td><td class="num">${yuan2(aSeries[i])}</td><td class="num">${yuan2(pSeries[i])}</td></tr>`).join('')}</tbody></table></div>
+    </details>` : ''}
+  </section>
+
+    <section class="card dashboard-card drill-details" id="drill-details" aria-labelledby="drill-details-heading">
+      <div class="dashboard-heading"><div><h3 id="drill-details-heading">三级穿透 · 打标明细</h3>
+        <p>${esc(catTitle)} · ${src === 'plan' ? '已审批计划' : '已确认流水'} · 共 ${list.length} 条${displayed.length < list.length ? ' · 显示前 ' + displayed.length + ' 条' : ''}</p></div>
+      </div>
+      ${autoPlan ? `<div class="banner info">当前科目暂无已确认流水，明细默认展示已审批计划。</div>` : ''}
+      <div class="chart-filters drill-detail-filters">
+        ${chartFilter('收支方向', `<select data-act="drill-dir2sel">
+          <option value="both"${dir === 'both' ? ' selected' : ''}>全部</option>
+          <option value="收"${dir === '收' ? ' selected' : ''}>流入</option>
+          <option value="支"${dir === '支' ? ' selected' : ''}>流出</option>
+        </select>`)}
+        ${chartFilter('二级科目', `<select data-act="drill-catsel"><option value="">全部科目</option>
+          ${subs.map(l2 => `<option value="${esc(l2)}"${cat === l2 ? ' selected' : ''}>${esc(l2)}</option>`).join('')}</select>`)}
+        ${chartFilter('数据源', `<select data-act="drill-srcsel">
+          <option value="actual"${src === 'actual' ? ' selected' : ''}>实际流水</option>
+          <option value="plan"${src === 'plan' ? ' selected' : ''}>已审批计划</option>
+        </select>`)}
+        <label class="chart-filter drill-amount"><span>最低金额（元） <b data-amt-lab>${big(thr)}</b></span>
+          <input type="range" data-act="drill-amt" min="0" max="${Math.ceil(maxAmt)}" step="${maxAmt < 1000 ? 1 : 1000}" value="${thr}"></label>
+      </div>
+      ${list.length ? `<div class="scroll tall drill-table-wrap" role="region" aria-label="打标明细表" tabindex="0"><table class="tbl drill-table"><thead><tr><th>日期</th><th>方向</th><th>二级科目</th><th>对方户名</th><th>活动类型</th><th class="num">金额（元）</th></tr></thead><tbody>
+        ${displayed.map(r => `<tr>
           <td class="r">${esc(r.date)}</td>
-          <td>${r.dir === '收' ? '<span class="chip matched">收</span>' : '<span class="chip pending">支</span>'}</td>
+          <td>${r.dir === '收' ? '<span class="chip matched">收</span>' : '<span class="chip pending">支</span>'}${r.off ? ' <span class="chip manual">冲减</span>' : ''}</td>
           <td>${esc(r.cat)}</td><td>${esc(r.cp || '—')}</td>
           <td class="sub">${esc(L1_SHORT[r.l1] || r.l1 || '')}</td>
-          <td class="num ${r.dir === '收' ? 'in' : 'out'}">${r.dir === '收' ? '+' : '−'}${yuan(r.amt)}</td></tr>`).join('')}
+          <td class="num ${r.amt < 0 ? 'out' : (r.dir === '收' ? 'in' : 'out')}">${r.amt < 0 ? '−' : (r.dir === '收' ? '+' : '−')}${yuan(Math.abs(r.amt))}</td></tr>`).join('')}
       </tbody></table></div>` : `<div class="empty"><div class="t">当前分类 / 筛选下没有命中${src === 'plan' ? '计划' : '流水'}</div>换个分类，或把金额阈值拉到 0。</div>`}
-      <div class="flexrow" style="margin-top:10px;gap:14px">
+      <div class="chips drill-detail-totals">
         <span class="chip matched">收入 ${cnt(r => r.dir === '收')} 笔 · ${big(inAmt)}</span>
         <span class="chip pending">支出 ${cnt(r => r.dir === '支')} 笔 · ${big(outAmt)}</span>
         <span class="chip">净额 ${list.length} 笔 · ${big(inAmt - outAmt)}</span>
       </div>
-    </div>
+    </section>
   </div>`;
 }
 
@@ -1197,6 +1460,64 @@ function svgTopDev(items, w) {
     '<div class="legend"><span><i style="background:#2E5C9A"></i>偏差为正（超计划）</span><span><i style="background:#C0504D"></i>偏差为负（欠计划）</span><span class="mini">悬停看计划/实际</span></div>';
 }
 
+const VA_GRAINS = { month: '按月', quarter: '按季度', cumulative: '累计' };
+
+function vaPeriodComparison(periods, qualityBlocked) {
+  const groups = new Map();
+  for (const period of periods) {
+    const { month } = period;
+    const quarter = `${month.slice(0, 4)} Q${Math.ceil(Number(month.slice(5)) / 3)}`;
+    const label = S.vaGrain === 'quarter' ? quarter : S.vaGrain === 'cumulative' ? '所选期间累计' : month;
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(period);
+  }
+  const totals = Array.from(groups, ([label, items]) => {
+    const planned = items.filter(m => m.plan != null);
+    const missing = planned.filter(m => m.actual == null);
+    const actualMonths = planned.length ? planned : items;
+    const plan = planned.length ? planned.reduce((sum, m) => sum + m.plan, 0) : null;
+    const actual = !qualityBlocked && !missing.length && actualMonths.some(m => m.actual != null)
+      ? actualMonths.reduce((sum, m) => sum + (m.actual ?? 0), 0) : null;
+    const delta = plan != null && actual != null ? actual - plan : null;
+    const rate = plan && delta != null ? delta / plan * 100 : null;
+    const remarks = [];
+    if (S.vaGrain === 'quarter' && items.length < 3) remarks.push('区间未覆盖完整季度');
+    if (plan == null) remarks.push(actual == null ? '暂无已审批计划' : '暂无已审批计划，仅列实际');
+    if (planned.length && planned.length < items.length) remarks.push(`仅计 ${planned.length}/${items.length} 个有计划月`);
+    if (missing.length) remarks.push('缺少同期确认流水（' + missing.map(m => m.month).join('、') + '）');
+    if (qualityBlocked) remarks.push('报告期间数据待核查');
+    if (plan === 0 && actual != null) remarks.push('计划为 0，偏差率不可算');
+    const first = items[0].month, last = items.at(-1).month;
+    return { label, span: first === last ? first : `${first} 至 ${last}`, plan, actual, delta, rate, remarks };
+  });
+  const grainLabel = VA_GRAINS[S.vaGrain];
+  const controls = Object.entries(VA_GRAINS).map(([key, label]) => `<button type="button" class="${key === S.vaGrain ? 'on' : ''}"
+    data-act="va-grain" data-value="${key}" aria-pressed="${key === S.vaGrain}">${label}</button>`).join('');
+  const contentWidth = Math.max(330, 80 + totals.length * 30);
+  const hasValues = totals.some(t => t.plan != null || t.actual != null);
+  const chart = hasValues ? `<div class="va-plot"><div style="min-width:${contentWidth}px">
+    ${svgMonthlyChart(totals.map(t => t.label), [
+      { label: '计划', color: 'var(--forecast)', values: totals.map(t => t.plan) },
+      { label: '实际', color: 'var(--navy)', values: totals.map(t => t.actual) }
+    ], { bars: true, title: grainLabel + '计划与实际对比', width: Math.max(540, contentWidth) })}
+    </div></div><div class="legend"><span><i class="drill-plan-key"></i>计划</span><span><i class="drill-actual-key"></i>实际</span></div>`
+    : '<div class="empty">所选期间暂无可绘制的计划或实际金额</div>';
+  return `<section class="card dashboard-card va-comparison" aria-labelledby="va-period-title">
+    <div class="dashboard-heading">
+      <div><h3 id="va-period-title">计划与实际对比</h3><p>收支金额合计 · 人民币（元）</p></div>
+      <div class="seg comparison-seg" role="group" aria-label="预实分析时间维度">${controls}</div>
+    </div>
+    ${chart}
+    ${totals.length ? `<div class="scroll va-period-data" tabindex="0" role="region" aria-label="${grainLabel}预实对比数据">
+      <table class="tbl va-period-table"><thead><tr><th scope="col">期间</th><th scope="col" class="num">计划</th><th scope="col" class="num">实际</th>
+        <th scope="col" class="num">偏差额</th><th scope="col" class="num">偏差率</th><th scope="col">口径说明</th></tr></thead>
+      <tbody>${totals.map(t => `<tr><th scope="row">${esc(t.label)}${t.span === t.label ? '' : `<div class="mini">${esc(t.span)}</div>`}</th>
+        <td class="num">${yuan2(t.plan)}</td><td class="num">${yuan2(t.actual)}</td><td class="num">${yuan2(t.delta)}</td>
+        <td class="num">${pctTxt(t.rate)}</td><td class="sub">${esc(t.remarks.join(' · '))}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    <div class="note">实际按有已审批计划的月份取数。偏差率 =（汇总实际 − 汇总计划）÷ 汇总计划。累计范围取自上方「期间」筛选。</div>
+  </section>`;
+}
+
 function paneVA() {
   /* 与现金流量表同口径：内部往来整段剔除（标识取映射表） */
   const allRaw = rows(), psRaw = plans();
@@ -1206,9 +1527,23 @@ function paneVA() {
   // 同期口径：只用「有计划的月份」里的实际流水做对比，避免拿 1-9 月实际比 10-12 月计划
   const pMonths = new Set(ps.map(x => x.period));
   const cmpRows = all.filter(r => pMonths.has(r.txn_date.slice(0, 7)));
-  const allAgg = agg(all), a = agg(cmpRows);
+  const a = agg(cmpRows);
   const p = { in: ps.filter(x => x.direction === '流入').reduce((s, x) => s + x.amount, 0), out: ps.filter(x => x.direction === '流出').reduce((s, x) => s + x.amount, 0) };
-  const noOverlap = ps.length > 0 && cmpRows.length === 0;
+  const plansByMonth = grp(ps, x => x.period);
+  const actualByMonth = grp(all, r => r.txn_date.slice(0, 7));
+  const periods = [];
+  for (const date = new Date(S.snap.start + '-01T00:00:00Z'); Number.isFinite(date.getTime()); date.setUTCMonth(date.getUTCMonth() + 1)) {
+    const month = date.toISOString().slice(0, 7);
+    if (!S.snap.end || month > S.snap.end) break;
+    periods.push({
+      month,
+      plan: plansByMonth[month]?.reduce((sum, x) => sum + x.amount, 0) ?? null,
+      actual: actualByMonth[month]?.reduce((sum, r) => sum + cny(r), 0) ?? null
+    });
+  }
+  const missingMonths = Array.from(pMonths).filter(m => !actualByMonth[m]);
+  const qualityBlocked = Boolean(S.snap.pending || (S.snap.missingFx || []).length);
+  const comparable = ps.length > 0 && !missingMonths.length && !qualityBlocked;
   const byKey = new Map();
   cmpRows.forEach(r => { const k = r.l1 + '|' + (r.l2 || '未分类'); const o = byKey.get(k) || { l1: r.l1, l2: r.l2, plan: 0, actIn: 0, actOut: 0, nIn: 0, nOut: 0 }; if (r.direction === '收') { o.actIn += cny(r); o.nIn++; } else { o.actOut += cny(r); o.nOut++; } byKey.set(k, o); });
   ps.forEach(x => { const k = x.l1 + '|' + x.l2; const o = byKey.get(k) || { l1: x.l1, l2: x.l2, plan: 0, planIn: 0, planOut: 0, actIn: 0, actOut: 0, nIn: 0, nOut: 0 }; o.plan += x.amount; if (x.direction === '流入') o.planIn += x.amount; else o.planOut += x.amount; byKey.set(k, o); });
@@ -1228,15 +1563,11 @@ function paneVA() {
   const manualAmt = all.filter(r => r.matched_by === 'manual').reduce((s, r) => s + cny(r), 0);
   const ruleAmt = a.inflow + a.outflow - manualAmt;
   const manualCnt = all.filter(r => r.matched_by === 'manual').length;
-  const months = monthsInSnap();
-  const pv = months.map(m => ps.filter(x => x.period === m).reduce((s, x) => s + x.amount, 0));
-  const av = months.map(m => agg(all.filter(r => r.txn_date.slice(0, 7) === m)).inflow + agg(all.filter(r => r.txn_date.slice(0, 7) === m)).outflow);
   let streak = 0;
-  for (let i = months.length - 1; i >= 0; i--) {
-    const pa = ps.filter(x => x.period === months[i]).reduce((s, x) => s + x.amount, 0);
-    const aa = av[i];
-    if (!pa) break;
-    if (Math.abs((aa - pa) / pa) > 0.1) streak++; else break;
+  for (let i = periods.length - 1; i >= 0; i--) {
+    const { plan, actual } = periods[i];
+    if (!plan || actual == null || Math.abs((actual - plan) / plan) <= 0.1) break;
+    streak++;
   }
   const pend = S.snap.pending;
 
@@ -1249,20 +1580,19 @@ function paneVA() {
     <a href="#" class="btn ghost sm" data-act="tab" data-tab="in-flow">去处理待确认（${pend}）</a>
   </div>
   ${!ps.length ? `<div class="banner warn"><span class="ic">⚠</span><div>本期没有已审批计划，偏差无法计算。到「资金计划编制」提交并审批后自动生效。${(S.meta.planBatches || []).filter(x => x.status !== 'approved').length ? '（已有待审批批次）' : ''}</div></div>`
-    : noOverlap ? `<div class="banner info"><span class="ic">i</span><div><b>计划月尚无流水，偏差不可比。</b>计划覆盖 ${Array.from(pMonths).sort().join('、')}，该期间实际为 0；下方偏差按「同期口径」计算，流水接入后自动成立。</div></div>` : ''}
+    : !comparable ? `<div class="banner info"><span class="ic">i</span><div><b>偏差暂不可比，请核查数据。</b>${missingMonths.length ? '以下计划月没有已确认流水：' + esc(missingMonths.sort().join('、')) + '。' : ''}${S.snap.pending ? ' 本期存在待确认流水。' : ''}${(S.snap.missingFx || []).length ? ' 本期存在汇率缺失。' : ''}已有流水不代表当月流水完整。</div></div>` : `<div class="quality-strip">已找到同期确认流水；系统无法自动判断当月流水是否全部导入，请结合批次核对完整性。</div>`}
 
   <div class="kpis">
     ${kpi('计划合计', big(totalPlan), '元', `<span class="s">${ps.length} 行</span>`)}
-    ${kpi('实际合计（同期）', big(totalAct), '元', `<span class="s">${cmpRows.length} 笔 · 全期 ${big(allAgg.inflow + allAgg.outflow)}</span>`, 'in')}
-    ${kpi('总偏差率', totalRate == null ? '—' : pctTxt(totalRate), '', `<span class="s ${totalRate > 0 ? 'up' : 'down'}">${totalRate == null ? '' : '绝对额 ' + big(totalAct - totalPlan)}</span>`, totalRate > 0 ? 'warnline' : 'okline')}
-    ${kpi('连续偏差期数', streak, '期', `<span class="s">偏差>10% 且连续</span>`, streak >= 2 ? 'warnline' : '')}
+    ${kpi('实际合计（同期）', comparable ? big(totalAct) : '—', '元', `<span class="s">${cmpRows.length} 笔同期确认流水</span>`, 'in')}
+    ${kpi('总偏差率', !comparable || totalRate == null ? '—' : pctTxt(totalRate), '', `<span class="s">${!comparable || totalRate == null ? '数据待核查' : '偏差额 ' + big(totalAct - totalPlan)}</span>`, '')}
+    ${kpi('连续偏差月数', comparable ? streak : '—', '月', `<span class="s">月度绝对偏差率 >10%</span>`, comparable && streak >= 2 ? 'warnline' : '')}
   </div>
 
-  <div class="card" style="margin-bottom:12px"><h3>计划 / 实际 / 累计偏差 <span>按期间</span></h3>
-    ${months.length ? svgPVA(months, av, pv) : '<div class="empty">无数据</div>'}</div>
+  ${vaPeriodComparison(periods, qualityBlocked)}
 
-  <div class="grid g32">
-    <div class="card"><h3>科目偏差明细 <span>仅可比科目（有计划）· 按绝对偏差降序</span></h3>
+  ${comparable ? `<div class="grid g32">
+    <div class="card"><h3>科目偏差明细 <span>所选期间汇总 · 按绝对偏差降序</span></h3>
       ${svgDevBar(rowsVA)}
       <div class="hr"></div>
       <div class="scroll tall"><table class="tbl"><thead><tr><th>科目</th><th class="num">计划</th><th class="num">实际</th><th class="num">偏差额</th><th class="num">偏差率</th><th>方向</th><th>备注</th></tr></thead><tbody>
@@ -1270,11 +1600,11 @@ function paneVA() {
           <td class="num">${r.plan ? yuan(r.plan) : '—'}</td><td class="num">${r.act ? yuan(r.act) : '—'}</td>
           <td class="num ${r.unfavist ? 'out' : r.dev > 0 ? 'in' : ''}">${r.plan ? yuan(r.dev) : '—'}</td>
           <td class="num">${pctTxt(r.rate)}</td>
-          <td>${r.plan ? (r.unfavist ? '<span class="chip pending">不利</span>' : '<span class="chip matched">有利</span>') : '—'}</td>
+          <td>${r.plan ? (r.unfavist ? '<span class="chip pending">需关注</span>' : '<span class="chip">需分析原因</span>') : '—'}</td>
           <td class="sub">${r.plan ? (r.act ? '' : '计划无实际（可能走了其他科目或流水未确认）') : '计划未列该科目，下期补列'}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">无数据</td></tr>'}
       </tbody></table></div>
     </div>
-    <div class="card"><h3>偏差贡献度 Top5 <span>按绝对偏差</span></h3>
+    <div class="card"><h3>偏差贡献度 Top5 <span>所选期间汇总 · 按绝对偏差</span></h3>
       ${svgTopDev(topN)}
       <div class="hr"></div>
       ${topN.length ? `<table class="tbl"><thead><tr><th>科目</th><th class="num">偏差额</th><th class="num">占计划</th></tr></thead><tbody>
@@ -1291,7 +1621,7 @@ function paneVA() {
       </div>
       <div class="note">规则匹配 ${big(ruleAmt)} 元 / ${all.length - manualCnt} 笔；人工确认 ${big(manualAmt)} 元 / ${manualCnt} 笔。匹配度偏低时建议先清理待确认池。</div>
     </div>
-  </div>`;
+  </div>` : '<div class="card empty">数据具备可比条件后显示科目偏差及方向分析。</div>'}`;
 }
 
 /* ---------- 4 现金流量表 ---------- */
@@ -1438,6 +1768,24 @@ document.addEventListener('click', async ev => {
   try {
     if (act === 'tab') { ev.preventDefault(); S.tab = t.dataset.tab; S.err = ''; await render(); return; }
     if (act === 'jumpEnt') { S.entity = t.dataset.e; S.tab = 'g-ent'; await render(); return; }
+    if (act === 'structure-drill') {
+      S.drillAct = t.dataset.a;
+      S.drillCat = t.dataset.c;
+      S.drillDir2 = t.dataset.d;
+      S.drillAmt = 0;
+      S.drillSrc = 'actual';
+      S.tab = 'p-drill';
+      await render();
+      $('.pane-title', $('#pane'))?.scrollIntoView();
+      return;
+    }
+    if (act === 'compare-metric') { S.compareMetric = t.dataset.value; await render(); return; }
+    if (act === 'va-grain' && Object.hasOwn(VA_GRAINS, t.dataset.value)) {
+      S.vaGrain = t.dataset.value;
+      await render();
+      $('#pane [data-act="va-grain"][aria-pressed="true"]')?.focus({ preventScroll: true });
+      return;
+    }
     if (act === 'restr-kind') { S.restrKind = t.dataset.k || ''; await render(); return; }
     if (act === 'restr-rule-save') {
       const kd = ($('#restr-kind') || {}).value || '';
@@ -1485,6 +1833,7 @@ document.addEventListener('click', async ev => {
       if (!ids.length) return toast('先勾选要确认的行');
       // 分批：每行按其下拉选择或已有 code
       let ok = 0, skip = 0;
+      const ruleWarnings = [];
       const byCode = {};
       ids.forEach(id => {
         const sel = document.querySelector(`select[data-code="${id}"]`);
@@ -1494,10 +1843,14 @@ document.addEventListener('click', async ev => {
         if (!code) { skip++; return; }
         (byCode[code] = byCode[code] || []).push(id);
       });
-      for (const code in byCode) { const r = await post('/api/confirm', { ids: byCode[code], code, operator: '操作员' }); ok += r.confirmed || 0; }
+      for (const code in byCode) {
+        const r = await post('/api/confirm', { ids: byCode[code], code, operator: '操作员' });
+        ok += r.confirmed || 0;
+        if (r.ruleWarnings && r.ruleWarnings.length) ruleWarnings.push(...r.ruleWarnings);
+      }
       S.sel.clear();
       await loadMeta(); await loadSnap(); await loadReview(); buildHeader();
-      toast(`已确认 ${ok} 笔${skip ? `，${skip} 笔未选科目跳过` : ''}`);
+      toast(`已确认 ${ok} 笔${skip ? `，${skip} 笔未选科目跳过` : ''}${ruleWarnings.length ? `｜规则库提示：${ruleWarnings.join('；')}` : ''}`);
       return;
     }
     if (act === 'flow-change') {
@@ -1524,9 +1877,10 @@ document.addEventListener('click', async ev => {
       S.pick = {};
       await syncBatchState();
       await loadMeta(); await loadSnap(); await loadReview(); await render();
-      toast(r.changed
+      const warn = (r.errors && r.errors.length) ? '｜未写入：' + r.errors.join('；') : '';
+      toast((r.changed
         ? `已保存至数仓（${stamp()}）· 改动 ${r.changed} 笔${r.saved > r.changed ? `，其余 ${r.saved - r.changed} 笔无变化` : ''}`
-        : '没有需要保存的改动（所选科目与库里一致）');
+        : '没有需要保存的改动（所选科目与库里一致）') + warn);
       return;
     }
     if (act === 'confirm-batch') {
@@ -1540,8 +1894,17 @@ document.addEventListener('click', async ev => {
       await syncBatchState();
       S.flowFilter = 'all';
       await loadReview(); await render();
-      toast(`已确认并保存至数仓（${stamp()}）· 本次确认 ${r.confirmed} 笔${r.remaining ? `，仍有 ${r.remaining} 笔未识别` : ''}`);
+      const cwarn = (r.errors && r.errors.length) ? '｜未确认：' + r.errors.join('；') : '';
+      const rwarn = (r.ruleWarnings && r.ruleWarnings.length) ? '｜规则库提示：' + r.ruleWarnings.join('；') : '';
+      toast(`已确认并保存至数仓（${stamp()}）· 本次确认 ${r.confirmed} 笔${r.remaining ? `，仍有 ${r.remaining} 笔未识别` : ''}${cwarn}${rwarn}`);
       return;
+    }
+    if (act === 'off-open') { S.offOpen.add(Number(t.dataset.id)); await render(); return; }
+    if (act === 'off-clear') {
+      const cid = Number(t.dataset.id);
+      S.offOpen.delete(cid);
+      S.pick[cid] = { l1: '', code: '', offset: false };   // 取消冲减同时清掉科目，回到未指定
+      await render(); return;
     }
     if (act === 'edit-flow') { openEdit(Number(t.dataset.id)); return; }
     if (act === 'edit-save') { await saveEdit(); return; }
@@ -1686,6 +2049,19 @@ document.addEventListener('change', async ev => {
     await render();
     return;
   }
+  // 人工识别：冲减下拉（选二级科目 = 按该科目冲减；空 = 正常记账）
+  if (el.dataset.offset) {
+    const id = Number(el.dataset.offset);
+    const row = (S.pendingRows || []).find(r => r.id === id);
+    const prev = S.pick[id] || {};
+    const v = el.value || '';
+    S.pick[id] = { l1: prev.l1, code: v || ((row && row.code) || ''), offset: !!v };
+    S.offOpen.delete(id);      // 选完收起下拉
+    await render();
+    return;
+    return;
+  }
+
   if (el.dataset.code) {
     const id = Number(el.dataset.code);
     const prev = S.pick[id] || {};
@@ -1695,10 +2071,30 @@ document.addEventListener('change', async ev => {
   }
   const t = el.closest('[data-act]');
   if (!t) return;
+  if (t.dataset.act === 'bank-company') {
+    S.bankCompany = el.value;
+    await render();
+    $('#pane [data-act="bank-company"]')?.focus({ preventScroll: true });
+    return;
+  }
+  if (t.dataset.act === 'overview-chart-company') {
+    const kind = t.dataset.chart;
+    S.overviewChartCompany[kind] = el.value;
+    const body = $('.overview-chart-data', t.closest('.overview-chart'));
+    const wasOpen = $('details.support-chart', body)?.open;
+    body.innerHTML = overviewChartBody(kind, el.value, true);
+    const support = $('details.support-chart', body);
+    if (support && wasOpen) support.open = true;
+    return;
+  }
+  if (t.dataset.act === 'water-mode') { S.waterMode = el.value; await render(); return; }
+  if (t.dataset.act === 'water-start') { S.waterStart = el.value; await render(); return; }
+  if (t.dataset.act === 'water-end') { S.waterEnd = el.value; await render(); return; }
   if (t.dataset.act === 'entity') { S.entity = el.value; S.sel.clear(); await render(); return; }
-  if (t.dataset.act === 'period') { S.period = el.value; await loadSnap(); await render(); return; }
+  if (t.dataset.act === 'period') { S.period = el.value; await render(); return; }
   if (t.dataset.act === 'drill-bank') { S.drillBank = el.value; await render(); return; }
   if (t.dataset.act === 'drill-month') { S.drillMonth = el.value; await render(); return; }
+  if (t.dataset.act === 'drill-dir2sel') { S.drillDir2 = el.value || 'both'; await render(); return; }
   if (t.dataset.act === 'drill-catsel') { S.drillCat = el.value; await render(); return; }
   if (t.dataset.act === 'drill-srcsel') { S.drillSrc = el.value; await render(); return; }
   if (t.dataset.act === 'drill-amt') { S.drillAmt = Number(el.value) || 0; await render(); return; }
@@ -1721,7 +2117,6 @@ document.addEventListener('click', ev => {
 
 document.addEventListener('input', ev => {
   const el = ev.target;
-  if (el && el.dataset && el.dataset.act === 'drill-dir2sel') { S.drillDir2 = el.value || 'both'; render(); return; }
   if (el && el.dataset && el.dataset.act === 'drill-amt') {
     const lab = document.querySelector('[data-amt-lab]');
     if (lab) lab.textContent = big(Number(el.value) || 0);
@@ -1778,6 +2173,11 @@ function collectFlowPicks() {
   document.querySelectorAll('select[data-code]').forEach(sel => {
     const id = Number(sel.dataset.code);
     const row = (S.pendingRows || []).find(r => r.id === id);
+    // 冲减：显式动过下拉以选择为准；没动过的行保留库里的冲减标记（如继承原笔的冲减行）
+    const oSel = document.querySelector('select[data-offset="' + id + '"]');
+    const picked = S.pick[id] || null;
+    const pickOff = (picked && ('offset' in picked)) ? !!picked.offset : null;
+    const wantOff = pickOff !== null ? pickOff : !!(row && row.offset_of);   // 只是点开看看不算冲减
     const opt = smByCode(sel.value);
     let code = sel.value || '';
     // 下拉里没有该行原有科目（一级/方向联动过滤掉）→ 保留库里的 code，不要当成「清空科目」
@@ -1786,7 +2186,8 @@ function collectFlowPicks() {
       const oldSm = smByCode(row.code);
       if (oldSm && oldSm.l2 === opt.l2) code = row.code;
     }
-    items.push({ id, code });
+    if (wantOff) code = (picked && picked.code) || (oSel && oSel.value) || code;   // 冲减科目就是这个 code
+    items.push({ id, code, offset: wantOff });
   });
   return items;
 }
@@ -1797,11 +2198,23 @@ async function handleFlowFiles(files) {
   const b = S.batch;
   if (!b.entity || !b.period) { S.err = '请先填写公司与期间'; await render(); return; }
   S.err = '';
-  let total = 0, allRows = [], dupInFile = [], errors = [];
+  let total = 0, allRows = [], dupInFile = [], errors = [], pdfWarnings = [];
   const outRows = [];   // 文件里不属于所选期间的流水（跳过）
   for (const f of files) {
     try {
       const raw = await readFileRows(f);
+      if (raw.pdfInfo) {
+        const owner = raw.pdfInfo.owner || '';
+        const selected = E().find(e => e.short === b.entity) || {};
+        if (raw.pdfInfo.currency && selected.ccy && raw.pdfInfo.currency !== selected.ccy) {
+          errors.push(`${f.name}：PDF 币种 ${raw.pdfInfo.currency} 与所选公司币种 ${selected.ccy} 不一致，请先核对公司设置`); continue;
+        }
+        if (owner && owner.toUpperCase() !== String(selected.name || '').toUpperCase() &&
+            !window.confirm(`PDF 账户名称：${owner}\n当前选择公司：${selected.name || b.entity}\n两者名称不完全一致，请核对后决定是否继续。`)) {
+          errors.push(`${f.name}：账户名称未确认`); continue;
+        }
+        pdfWarnings.push(...raw.pdfInfo.warnings);
+      }
       const parsed = parseFlowFile(raw, f.name, b.entity);
       if (parsed.error) { errors.push(`${f.name}：${parsed.error}`); continue; }
       total += parsed.rows.length;
@@ -1838,7 +2251,7 @@ async function handleFlowFiles(files) {
   }
   const ri = await post('/api/import', { batchId: rb.batch.id, rows: allRows, submit: true });
   S.parse = { total, rows: allRows, dup: ri.dup, dupRows: ri.dupRows, repaired: ri.repaired || 0, dupInFile, hit: ri.inserted - ri.pending,
-    outPeriod: outRows.length, outMonths, errors: errors.concat(ri.errors || []) };
+    outPeriod: outRows.length, outMonths, errors: errors.concat(ri.errors || [], pdfWarnings) };
   S.batch.id = ri.batchDropped ? null : rb.batch.id;
   S.batch.status = ri.batchDropped ? '' : 'parsed';
   await syncBatchState();

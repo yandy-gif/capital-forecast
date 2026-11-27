@@ -2,6 +2,7 @@
 """v11 流水「保存 → 全部确认」回归测试（临时库，不碰工作库）"""
 import os
 import sys
+import json
 import tempfile
 import unittest
 import pathlib
@@ -14,7 +15,16 @@ class FlowSaveConfirmTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=ROOT / "tests")
         self.old_db = os.environ.get("V11_DB")
+        self.old_rulebook = os.environ.get("BANK_FLOW_RULEBOOK")
         os.environ["V11_DB"] = str(pathlib.Path(self.tmp.name) / "v11test.db")
+        rulebook = pathlib.Path(self.tmp.name) / "rules.json"
+        rulebook.write_text(json.dumps({"schema": 1, "version": "test", "rules": [{
+            "id": "TEST-B99", "pri": 1.0, "direction": "支", "match_on": "memo",
+            "pattern": "小额验证", "code": "B99", "enabled": True,
+            "entity": ["*"], "account": ["*"]
+        }]}, ensure_ascii=False),
+                            encoding="utf-8")
+        os.environ["BANK_FLOW_RULEBOOK"] = str(rulebook)
         sys.path.insert(0, str(V11))
         for m in ("db11", "xls_read"):
             sys.modules.pop(m, None)
@@ -42,6 +52,10 @@ class FlowSaveConfirmTests(unittest.TestCase):
             os.environ.pop("V11_DB", None)
         else:
             os.environ["V11_DB"] = self.old_db
+        if self.old_rulebook is None:
+            os.environ.pop("BANK_FLOW_RULEBOOK", None)
+        else:
+            os.environ["BANK_FLOW_RULEBOOK"] = self.old_rulebook
         sys.modules.pop("db11", None)
         self.tmp.cleanup()
 

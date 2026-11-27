@@ -13,6 +13,7 @@
   POST /api/batch                        建申请批次（公司+期间+文件名+指纹）
   POST /api/import                       逐笔落库（submit=false 存草稿）
   POST /api/confirm                      人工确认（更新状态+反写规则+留痕）
+  POST /api/flow/offset                  单条冲减标记（offset_of=-1 按科目冲减，只能冲反方向）
   POST /api/edit                         单条修改（置待确认，留痕）
   POST /api/plan                         计划上传（approve=false 为草稿）
   POST /api/plan/approve                 计划审批入库
@@ -133,6 +134,15 @@ class Handler(SimpleHTTPRequestHandler):
     # ---------- POST ----------
     def do_POST(self):
         u = urlparse(self.path)
+        if u.path == "/api/parse-pdf":
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0 or n > 60 * 1024 * 1024:
+                return self._json({"error": "文件为空或超过 60MB"}, 400)
+            try:
+                import pdf_flow
+                return self._json(pdf_flow.parse_pdf(self.rfile.read(n)))
+            except Exception as ex:
+                return self._json({"error": "PDF 解析失败：%s" % ex}, 400)
         # 二进制文件解析（.xls / 假 xls）走原始 body，不走 JSON
         if u.path == "/api/parse-file":
             n = int(self.headers.get("Content-Length") or 0)
@@ -161,6 +171,11 @@ class Handler(SimpleHTTPRequestHandler):
             if u.path == "/api/confirm":
                 return self._json(db11.confirm_flows(
                     b.get("ids", []), b["code"], b.get("operator", "操作员")))
+            if u.path == "/api/flow/offset":
+                # 单条设置/取消「按科目冲减」（offset_of=-1，不挂原笔；只能冲反方向科目）
+                return self._json(db11.set_flow_offset(
+                    int(b["id"]), b.get("code") or None,
+                    bool(b.get("offset", True)), b.get("operator", "操作员")))
             if u.path == "/api/flow/save":
                 # batchId 允许为空（没有打开具体批次时按记录自身批次归集），不要因 int(None) 直接 500
                 return self._json(db11.save_flow_assignments(
