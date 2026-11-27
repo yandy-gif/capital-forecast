@@ -11,8 +11,12 @@
 import os
 import re
 import json
+import hashlib
 import sqlite3
 import datetime
+import fnmatch
+import unicodedata
+import history_match
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # 允许用环境变量指向测试库，避免测试污染工作库
@@ -22,6 +26,10 @@ SEED = os.path.join(HERE, "seed.json")
 DICT = os.path.join(HERE, "dict_default.json")
 SKILL = os.path.join(os.path.expanduser("~"), ".workbuddy", "skills",
                      "bank-flow-recognition", "scripts")
+# 规则库真源（skill 维护）；可用环境变量覆盖，测试时指到临时文件
+RULEBOOK = os.environ.get("BANK_FLOW_RULEBOOK") or os.path.join(
+    os.path.expanduser("~"), ".workbuddy", "skills",
+    "bank-flow-rulebook", "rules", "rules.json")
 
 # 22 项 → 现金流量表项目（映射表 seed 用，之后一律读库）
 CF_ITEM = {
@@ -59,6 +67,9 @@ CF_ITEM = {
 }
 DIR_OF = {c: ("收" if c[0] in "ACE" else "支" if c[0] in "BDF" else "双向") for c in CF_ITEM}
 
+# 计划批次可编辑状态：导入/驳回后为 parsed；submitted（审批中）需先撤回，withdrawn / superseded 为终态
+PLAN_EDITABLE = ("parsed",)
+
 RELATED = ("珀莱雅", "美丽谷", "珀妍")
 CONSULT_ENT = ("凯缇丝", "青澜子衿", "闻芳叙雨")
 GROUP_KEYS = ("珀研", "内曜", "昕棉", "聆汐", "闻芳叙雨", "凯缇丝", "青澜子衿",
@@ -91,6 +102,10 @@ def init_db(reset=False):
     seed(c)
     _ensure_columns(c)      # 种子写入后回填内部往来标识
     _seed_restricted(c)
+    _offset_view(c)         # 按冲减口径重建 v_month_agg（幂等）
+    st = sync_rules(c)      # 规则库 → match_rule（幂等，每次启动都同步）
+    if not st.get("ok"):
+        print("[db11] 规则同步未完成：%s" % st.get("reason", ""))
     c.commit()
     c.close()
 
@@ -103,7 +118,9 @@ _COLUMNS = {
     "plan_batch": [("version", "INTEGER DEFAULT 1"), ("parent_id", "INTEGER"),
                    ("updated_at", "TEXT"), ("submitted_at", "TEXT"), ("submitted_by", "TEXT"),
                    ("reject_reason", "TEXT")],
-    "flow_raw": [("restricted_kind", "TEXT")],
+    "flow_raw": [("restricted_kind", "TEXT"), ("offset_of", "INTEGER"), ("balance_date", "TEXT")],
+    "match_rule": [("entity", "TEXT DEFAULT '*'"), ("account", "TEXT DEFAULT '*'"),
+                   ("rule_key", "TEXT"), ("memo_pattern", "TEXT DEFAULT ''")],
 }
 
 # 受限识别：类别 → 关键词（摘要 / 对方户名命中即打标签，不改科目分类）
@@ -230,11 +247,7 @@ def seed(c):
                     (code, l1, l2, sub, DIR_OF.get(code, "双向"), l2, sec, item,
                      int(code[1:]) if code[1:].isdigit() else 99))
 
-    # 匹配规则：优先从 skill 的 classify.KW 复制
-    rules = _skill_rules()
-    for pri, dr, kw, code, scope in rules:
-        cur.execute("""INSERT INTO match_rule(pri,direction,scope,keyword,code,enabled,source,hit_count,created_at)
-                       VALUES(?,?,?,?,?,1,'skill',0,?)""", (pri, dr, scope, kw, code, now()))
+    # 匹配规则：由 sync_rules() 从规则库（skill 的 rules.json）灌入，见 init_db
 
     # 汇率（人工维护表，种子里给两条基线，页面可改）
     for pair, rate, eff, op in (("USD/CNY", 6.68, "2026-11-01", "样表汇率"),
@@ -323,6 +336,271 @@ def _skill_rules():
         return [(1.0, "*", "珀研|内曜|昕棉|聆汐", "G01", "cp")]
 
 
+def _as_spec(v):
+    """规则库的 entity/account（数组或字符串）→ 库里存的逗号分隔字符串；'*' 表示不限"""
+    if v is None:
+        return "*"
+    if isinstance(v, str):
+        return v.strip() or "*"
+    parts = [str(x).strip() for x in v if str(x).strip()]
+    return ",".join(parts) or "*"
+
+
+def _rulebook():
+    """读规则库（skill 的 rules.json）。不存在或损坏返回 None，看板回落旧口径。"""
+    try:
+        with open(RULEBOOK, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        if isinstance(doc.get("rules"), list):
+            return doc
+    except Exception:
+        return None
+    return None
+
+
+def _rule_text(value):
+    """规则比对用的稳定文本：全半角归一、去空白、统一英文大小写。"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or "")).strip()).upper()
+
+
+def _exact_pattern(value):
+    """为人工确认生成精确匹配，而不是把一次确认放大成模糊关键词规则。"""
+    text = _rule_text(value)
+    return "^%s$" % re.escape(text) if text else ""
+
+
+def _manual_rule_fields(flow, code):
+    """由最终人工确认内容生成公司/账户限定的历史识别依据。"""
+    cp = _rule_text(flow["counterparty"])
+    memo = _rule_text(flow["memo"])
+    if not cp and not memo:
+        return None
+    scope = "history" if cp else "history_memo"
+    pattern = cp if cp else memo
+    memo_pattern = memo
+    account = str(flow["account"] or "").strip()
+    # 历史银行解析曾把余额列误写成本方账号；小数金额不能作为账户范围。
+    if re.fullmatch(r'\d+\.\d+', account):
+        account = ''
+    return {
+        "direction": str(flow["direction"] or "*"),
+        "match_on": scope,
+        "pattern": pattern,
+        "memo_pattern": memo_pattern,
+        "code": str(code),
+        "entity": [str(flow["entity"] or "*")],
+        "account": [account or "*"],
+    }
+
+
+def _history_rule_key(flow):
+    identity = json.dumps([flow['entity'], flow['id'], flow['created_at']], ensure_ascii=False)
+    return 'HIST-' + hashlib.sha256(identity.encode('utf-8')).hexdigest()[:16].upper()
+
+
+def _record_history_rule(doc, flow, code, operator, ts=None, increment=True):
+    fields = _manual_rule_fields(flow, code)
+    if not fields:
+        return None
+    rid, ts = _history_rule_key(flow), ts or now()
+    found = next((r for r in doc['rules'] if r.get('id') == rid), None)
+    created = found is None
+    if created:
+        found = {'id': rid, 'pri': 0.45, 'enabled': True, 'source': 'manual_back',
+                 'since': ts[:10], 'note': '人工确认历史：先看户名，摘要辅助，冲突留待确认',
+                 'confirmations': 0}
+        doc['rules'].append(found)
+    old_code = str(found.get('code') or '')
+    if old_code and old_code != fields['code']:
+        previous = found.setdefault('previous_codes', [])
+        if old_code not in previous:
+            previous.append(old_code)
+    found.update(fields)
+    found.update({'source_flow_id': flow['id'], 'pri': 0.45, 'enabled': True,
+                  'source': 'manual_back', 'last_learned_at': ts,
+                  'last_operator': str(operator or '操作员'),
+                  'confirmations': int(found.get('confirmations') or 0) + (1 if increment or created else 0)})
+    return {'created': created, 'updated': not created, 'ruleKey': rid}
+
+
+def _upsert_learned_rule(flow, code, operator):
+    """把一次人工确认沉淀进 skill 的规则真源。
+
+    每条人工流水对应一条可更新的历史依据；不同流水的不同结论保留以便识别冲突。
+    同一流水重新确认时原地更新。写入使用同目录临时
+    文件 + replace，避免中途写坏 rules.json。
+    """
+    try:
+        with open(RULEBOOK, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        if not isinstance(doc.get("rules"), list):
+            return {"ok": False, "error": "规则库缺少 rules 数组：%s" % RULEBOOK}
+        ts = now()
+        result = _record_history_rule(doc, flow, code, operator, ts)
+        if not result:
+            return {"ok": True, "skipped": "户名和摘要均为空"}
+        doc["version"] = ts[:10].replace("-", ".")
+        doc["updated_at"] = ts
+        tmp = "%s.%s.tmp" % (RULEBOOK, os.getpid())
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+                json.dump(doc, fh, ensure_ascii=False, indent=2)
+                fh.write("\n")
+            os.replace(tmp, RULEBOOK)
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        return {"ok": True, **result}
+    except Exception as exc:
+        return {"ok": False, "error": "规则库写入失败：%s" % exc}
+
+
+def _backfill_manual_rule(c, flow, code, operator):
+    """优先写技能规则库并同步；不可写时才以数据库临时规则兜底。"""
+    learned = _upsert_learned_rule(flow, code, operator)
+    if learned.get("ok"):
+        if learned.get("skipped"):
+            return {"learned": False, "error": ""}
+        synced = sync_rules(c)
+        if synced.get("ok"):
+            local_key = 'LOCAL-' + learned['ruleKey']
+            c.execute("UPDATE match_rule SET enabled=0 WHERE source='manual_back' AND rule_key=?", (local_key,))
+            c.execute("""INSERT INTO audit_log(target_type,target_id,action,field,after_val,operator,created_at)
+                         VALUES('flow',?,'rule_back','rule_key',?,?,?)""",
+                      (flow["id"], learned["ruleKey"], operator, now()))
+            return {"learned": bool(learned.get("created") or learned.get("updated")), "error": ""}
+        learned = {"ok": False, "error": "规则库已更新但同步失败：%s" % synced.get("reason", "未知原因")}
+
+    # 兜底仅保障当前库仍能继续使用；重置业务数据会清掉，响应会明确返回错误。
+    fields = _manual_rule_fields(flow, code)
+    if not fields:
+        return {"learned": False, "error": learned.get("error", "")}
+    entity, account = _as_spec(fields["entity"]), _as_spec(fields["account"])
+    local_key = 'LOCAL-' + _history_rule_key(flow)
+    exists = c.execute("SELECT id FROM match_rule WHERE rule_key=? AND source='manual_back'", (local_key,)).fetchone()
+    vals = (fields['direction'], fields['match_on'], fields['pattern'], fields['memo_pattern'],
+            fields['code'], entity, account)
+    if exists:
+        c.execute("""UPDATE match_rule SET direction=?,scope=?,keyword=?,memo_pattern=?,code=?,
+                     entity=?,account=?,enabled=1 WHERE id=?""", vals + (exists['id'],))
+    else:
+        c.execute("""INSERT INTO match_rule(direction,scope,keyword,memo_pattern,code,entity,account,
+                     pri,enabled,source,hit_count,created_at,rule_key)
+                     VALUES(?,?,?,?,?,?,?,0.45,1,'manual_back',0,?,?)""", vals + (now(), local_key))
+    return {"learned": True, "error": learned.get("error", "")}
+
+
+def _spec_hit(spec, value, digits=False):
+    """范围匹配：'*' 不限；逗号分隔多项；支持 * 通配，主体名与账号做包含兜底。
+    账号额外按纯数字比对（源文件里常带空格/横线）。"""
+    spec = str(spec or "*").strip()
+    if not spec or spec == "*":
+        return True
+    val = str(value or "").strip()
+    val_d = re.sub(r"\D", "", val)
+    for p in [x.strip() for x in spec.split(",") if x.strip()]:
+        if p == "*" or p == val:
+            return True
+        try:
+            if fnmatch.fnmatch(val, p) or fnmatch.fnmatch(val.upper(), p.upper()):
+                return True
+        except Exception:
+            pass
+        p_d = re.sub(r"\D", "", p)
+        if digits and p_d and val_d and (p_d in val_d or val_d in p_d):
+            return True
+        if val and (p in val or val in p):
+            return True
+    return False
+
+
+def _rule_rank(r):
+    """同 pri 时的命中顺序：账号规则(0) > 主体规则(0) > 通用(1)"""
+    keys = r.keys()
+    acc = (r["account"] if "account" in keys else "") or "*"
+    ent = (r["entity"] if "entity" in keys else "") or "*"
+    return (0 if acc not in ("", "*") else 1, 0 if ent not in ("", "*") else 1)
+
+
+def sync_rules(c=None):
+    """把规则库同步进 match_rule（幂等；init_db 每次启动调用）。
+
+    - 按 rule_key（规则 id）新增/更新；库里已不存在的 skill 规则停用，不删，保留命中数
+    - 旧库没有 rule_key 的历史规则按「pri+方向+范围+关键词+编码」认领，避免重复
+    - 规则库不可用时：match_rule 为空才回落引擎 KW / dict_default.json
+    """
+    own = c is None
+    c = c or conn()
+    st = {"ok": False, "version": "", "added": 0, "updated": 0, "adopted": 0,
+          "disabled": 0, "total": 0, "reason": ""}
+    doc = _rulebook()
+    if not doc:
+        st["reason"] = "规则库不可用：%s" % RULEBOOK
+        if not c.execute("SELECT COUNT(*) FROM match_rule").fetchone()[0]:
+            for pri, dr, kw, code, scope in _skill_rules():
+                c.execute("""INSERT INTO match_rule(pri,direction,scope,keyword,code,enabled,source,
+                             hit_count,created_at,entity,account) VALUES(?,?,?,?,?,1,'skill',0,?,?,?)""",
+                          (pri, dr, scope, kw, code, now(), "*", "*"))
+                st["added"] += 1
+            st["ok"] = True
+            st["version"] = "engine"
+        if own:
+            c.commit()
+            c.close()
+        return st
+    seen = set()
+    for r in doc["rules"]:
+        key = str(r.get("id") or "").strip()
+        if not key:
+            continue
+        seen.add(key)
+        vals = (float(r.get("pri") or 0), str(r.get("direction") or "*"),
+                str(r.get("match_on") or "any"), str(r.get("pattern") or ""),
+                str(r.get("memo_pattern") or ""), str(r.get("code") or ""),
+                1 if r.get("enabled") else 0, _as_spec(r.get("entity")),
+                _as_spec(r.get("account")))
+        old = c.execute("SELECT * FROM match_rule WHERE rule_key=?", (key,)).fetchone()
+        if old:
+            if (old["pri"], old["direction"], old["scope"], old["keyword"],
+                    old["memo_pattern"] if "memo_pattern" in old.keys() else "", old["code"],
+                    old["enabled"], old["entity"], old["account"]) != vals:
+                c.execute("""UPDATE match_rule SET pri=?,direction=?,scope=?,keyword=?,memo_pattern=?,code=?,
+                             enabled=?,entity=?,account=? WHERE rule_key=?""", vals + (key,))
+                st["updated"] += 1
+            continue
+        old = c.execute("""SELECT id FROM match_rule WHERE rule_key IS NULL AND source='skill'
+                           AND pri=? AND direction=? AND scope=? AND keyword=? AND code=?""",
+                        (vals[0], vals[1], vals[2], vals[3], vals[5])).fetchone()
+        if old:
+            c.execute("UPDATE match_rule SET rule_key=?,entity=?,account=?,enabled=?,memo_pattern=? WHERE id=?",
+                      (key, vals[7], vals[8], vals[6], vals[4], old["id"]))
+            st["adopted"] += 1
+            continue
+        c.execute("""INSERT INTO match_rule(pri,direction,scope,keyword,memo_pattern,code,enabled,source,
+                     hit_count,created_at,entity,account,rule_key) VALUES(?,?,?,?,?,?,?,'skill',0,?,?,?,?)""",
+                  vals[:7] + (now(),) + vals[7:] + (key,))
+        st["added"] += 1
+    for row in c.execute("""SELECT id,rule_key FROM match_rule
+                            WHERE source='skill' AND enabled=1 AND rule_key IS NOT NULL""").fetchall():
+        if row["rule_key"] not in seen:
+            c.execute("UPDATE match_rule SET enabled=0 WHERE id=?", (row["id"],))
+            st["disabled"] += 1
+    st["ok"] = True
+    st["version"] = str(doc.get("version") or "")
+    st["total"] = len(seen)
+    c.execute("INSERT INTO agg_meta(k,v) VALUES('rulebook_version',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+              (st["version"],))
+    c.execute("INSERT INTO agg_meta(k,v) VALUES('rulebook_synced_at',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+              (now(),))
+    if own:
+        c.commit()
+        c.close()
+    return st
+
+
 def _code_of(cur, f):
     if f.get("st") == "pending":
         return ""
@@ -346,35 +624,74 @@ def bump_agg(c=None):
 
 
 # ---------------------------------------------------------------- 分类
-def classify(c, dir_, cp, memo, entity, amount=0):
-    """规则来自 match_rule 表（可人工反写），命中返回 (code, rule_id, 依据)"""
-    text_cp = str(cp or "")
-    text_all = re.sub(r"\s+", "", text_cp + str(memo or ""))
-    text_up = text_all.upper()
+def _history_match(c, rules, dir_, cp, memo, entity, account):
+    result = history_match.match(rules, dir_, cp, memo, entity, account)
+    if result and result[1] is not None:
+        c.execute('UPDATE match_rule SET hit_count=hit_count+1,last_hit=? WHERE id=?', (now(), result[1]))
+    return result
+
+
+def classify(c, dir_, cp, memo, entity, amount=0, account=""):
+    """规则来自 match_rule 表（可人工反写），命中返回 (code, rule_id, 依据)。
+
+    规则范围：entity / account 两列（'*' 不限，逗号分隔，支持 * 通配）。
+    排序：pri 升序；同 pri 时「账号更具体 > 主体更具体 > 通用」，个性化规则不必压 pri。
+    """
+    text_cp = _rule_text(cp)
+    text_memo = _rule_text(memo)
+    text_all = text_cp + text_memo
+    rows = c.execute("SELECT * FROM match_rule WHERE enabled=1 ORDER BY id").fetchall()
+    history = _history_match(c, rows, dir_, cp, memo, entity, account)
+    if history is not None:
+        return history
     # 关联方回款按主体性质分流（这条是硬逻辑，不是关键词）
     if dir_ == "收" and any(k in text_all for k in RELATED):
         code = "A03" if entity in CONSULT_ENT else "A01"
         return code, None, "关联方回款，按主体业务性质归集"
-    rows = c.execute("SELECT * FROM match_rule WHERE enabled=1 ORDER BY pri ASC, id ASC").fetchall()
+    rows = sorted(rows, key=lambda r: (r["pri"], _rule_rank(r), r["id"]))
     hit = None
     for r in rows:
+        if r['scope'] in ('history', 'history_memo'):
+            continue
         if r["direction"] not in ("*", dir_):
             continue
-        # person 只能看户名本身，不能把摘要拼进来，否则 ^…{2,4}$ 永远不匹配
-        target = text_cp if r["scope"] in ("cp", "person") else text_up
-        if r["scope"] == "person" and not re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", text_cp.strip()):
+        # 主体 / 账号维度：'' 或 '*' 就是不限
+        if not _spec_hit(r["entity"] if "entity" in r.keys() else "*", entity):
             continue
-        try:
-            if not re.search(r["keyword"], target, re.I if r["scope"] == "cp" else 0):
+        if not _spec_hit(r["account"] if "account" in r.keys() else "*", account, digits=True):
+            continue
+        # person 只能看户名本身，不能把摘要拼进来，否则 ^…{2,4}$ 永远不匹配。
+        # both 是人工确认沉淀的精确组合：户名和摘要同时命中才可复用该分类。
+        scope = r["scope"]
+        if scope == "both":
+            memo_pattern = r["memo_pattern"] if "memo_pattern" in r.keys() else ""
+            try:
+                if not memo_pattern or not re.search(r["keyword"], text_cp, re.I):
+                    continue
+                if not re.search(memo_pattern, text_memo, re.I):
+                    continue
+            except re.error:
                 continue
-        except re.error:
-            continue
+        else:
+            target = text_cp if scope in ("cp", "person") else text_memo if scope == "memo" else text_all
+            if scope == "person" and not re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", text_cp):
+                continue
+            try:
+                if not re.search(r["keyword"], target, re.I):
+                    continue
+            except re.error:
+                continue
         head = r["code"][0]
         if head in "ACE" and dir_ != "收":
             continue
         if head in "BDF" and dir_ != "支":
             continue
-        if r["code"] == "G01" and not any(k in text_all for k in GROUP_KEYS):
+        # G01 的 GROUP_KEYS 兜底只对「通用 G01 规则」生效：主体/账号已限定的条目不拦
+        ent_spec = r["entity"] if "entity" in r.keys() else "*"
+        acc_spec = r["account"] if "account" in r.keys() else "*"
+        if (r["code"] == "G01" and (ent_spec or "*") in ("", "*")
+                and (acc_spec or "*") in ("", "*")
+                and not any(k in text_all for k in GROUP_KEYS)):
             continue
         hit = r
         break
@@ -384,6 +701,158 @@ def classify(c, dir_, cp, memo, entity, amount=0):
     if abs(float(amount or 0)) <= 1:
         return ("A99" if dir_ == "收" else "B99"), None, "小额（≤1元）鉴权/验证款"
     return None, None, "规则未命中，留空待人工确认"
+
+
+OFFSET_DEFAULT = {
+    "enabled": True,
+    "keywords": ["退还", "退回", "退款", "账户错误", "户名不符", "打款有误", "冲回", "退票"],
+    "max_days": 90,          # 原笔与冲销笔的最大间隔天数；0 = 不限
+    "allow_partial": True,   # 允许部分退（冲销金额 <= 原笔金额）
+    "auto_confirm": True,    # 命中即确认（False 则留待人工）
+}
+
+
+def _offset_cfg():
+    """冲销配置：规则库顶层 offset 块；规则库不可用时用内置默认值。"""
+    cfg = dict(OFFSET_DEFAULT)
+    doc = _rulebook() or {}
+    for k, v in (doc.get("offset") or {}).items():
+        if v is not None:
+            cfg[k] = v
+    return cfg
+
+
+def _offset_hit(cfg, cp, memo):
+    """摘要/户名命中冲销关键词则返回该词，否则 None。"""
+    if not cfg.get("enabled"):
+        return None
+    text = re.sub(r"\s+", "", str(memo or "") + str(cp or ""))
+    for kw in cfg.get("keywords") or []:
+        if kw and kw in text:
+            return kw
+    return None
+
+
+def try_offset(c, entity, dir_, cp, memo, amount, date, account=""):
+    """轻量冲销匹配：同主体 + 同对方户名 + 反方向 + 原笔金额足够 + 时间窗内。
+
+    命中后**继承原笔科目**（只冲同科目），由调用方按负向金额处理并自动确认。
+    返回 {"id","code","note"} 或 None；本函数不写库。
+    条件不满足（无对方户名、金额超额、找不到原笔）一律返回 None，交给正常规则。
+    """
+    cfg = _offset_cfg()
+    kw = _offset_hit(cfg, cp, memo)
+    if not kw:
+        return None
+    cp_n = re.sub(r"\s+", "", str(cp or ""))
+    if not cp_n:
+        return {"miss": True, "kw": kw}   # 没有对方户名不自动冲，转人工
+    try:
+        amt = abs(float(amount or 0))
+    except Exception:
+        return {"miss": True, "kw": kw}
+    if amt <= 0:
+        return {"miss": True, "kw": kw}
+    back = "支" if dir_ == "收" else "收"
+    sql = ("SELECT * FROM flow_raw WHERE entity=? AND direction=? AND status='confirmed' "
+           "AND IFNULL(code,'')<>'' AND REPLACE(IFNULL(counterparty,''),' ','')=? "
+           "AND IFNULL((SELECT SUM(f2.amount) FROM flow_raw f2 WHERE f2.offset_of=flow_raw.id),0) + ? "
+           "    <= flow_raw.amount + 0.005 ")
+    args = [entity, back, cp_n, amt]
+    if not cfg.get("allow_partial"):
+        sql += "AND abs(flow_raw.amount - ?) < 0.005 "
+        args.append(amt)
+    max_days = int(cfg.get("max_days") or 0)
+    if max_days > 0:
+        try:
+            d0 = (datetime.datetime.strptime(str(date)[:10], "%Y-%m-%d")
+                  - datetime.timedelta(days=max_days)).strftime("%Y-%m-%d")
+            sql += "AND txn_date >= ? AND txn_date <= ? "
+            args += [d0, str(date)[:10]]
+        except Exception:
+            pass
+    sql += "ORDER BY txn_date DESC, id DESC LIMIT 1"
+    row = c.execute(sql, args).fetchone()
+    if not row:
+        return {"miss": True, "kw": kw}
+    return {"id": row["id"], "code": row["code"],
+            "note": "冲销匹配(原笔#%d, %s)" % (row["id"], kw)}
+
+
+# 冲减（无原笔）：offset_of = -1 表示「按科目冲减」——不挂原笔，直接冲减所选科目的反方向。
+# snapshot() 对 offset 行统一「方向取反 + 金额取负」，于是：
+#   行方向=支 → 记成「收 −金额」，冲减收入类科目（如退款冲货款收入）；
+#   行方向=收 → 记成「支 −金额」，冲减支出类科目（如退还冲服务费）。
+# 只有反方向科目能冲减：选同向科目会把金额抵到错误的一侧，必须拦住。
+OFFSET_BY_SUBJECT = -1
+
+
+def _offset_want_dir(direction):
+    """冲减后实际记账方向：收 → 支，支 → 收"""
+    return "支" if direction == "收" else "收"
+
+
+def offset_dir_ok(c, f, code):
+    """冲减方向校验：返回 (ok, 说明)。只能冲减反方向科目。"""
+    sm = c.execute("SELECT * FROM subject_map WHERE code=?", (code or "",)).fetchone()
+    if not sm:
+        return False, "冲减科目不存在：%s" % (code or "(空)")
+    want = _offset_want_dir(f["direction"])
+    d = (sm["direction"] or "双向").strip()
+    if d not in ("双向", want):
+        return False, ("「%s」是%s向科目，这笔是 %s 方向，冲减后按「%s −金额」记账，只能选%s向科目"
+                       % (sm["l2"], d, f["direction"], want, want))
+    return True, ""
+
+
+def _offset_suggest_map(c):
+    """冲减建议底表：同对方最近一笔已确认科目（分别按「反方向」「任意方向」各留一条）。"""
+    m = {}
+    for r in c.execute("SELECT REPLACE(IFNULL(counterparty,''),' ','') AS cp, direction, code "
+                       "FROM flow_raw WHERE status='confirmed' AND IFNULL(code,'')<>'' "
+                       "ORDER BY txn_date DESC, id DESC"):
+        cp = r["cp"]
+        if not cp:
+            continue
+        m.setdefault(("any", cp), r["code"])
+        m.setdefault((r["direction"], cp), r["code"])
+    return m
+
+
+def offset_suggest(m, f):
+    """这笔若冲减，推测要冲的科目：同对方**反方向**历史科目优先，其次同对方任意方向。"""
+    cp = re.sub(r"\s+", "", str(f.get("counterparty") or ""))
+    if not cp:
+        return ""
+    return m.get((_offset_want_dir(f.get("direction") or ""), cp)) or m.get(("any", cp)) or ""
+
+
+def offset_hint(c, rows):
+    """给一批待识别行补 offset_suggest（冲减科目推测）与 is_offset 标记，原地返回。"""
+    m = _offset_suggest_map(c)
+    for r in rows:
+        r["offset_suggest"] = offset_suggest(m, r)
+        r["is_offset"] = 1 if int(r.get("offset_of") or 0) else 0
+    return rows
+
+
+def _offset_view(c):
+    """v_month_agg 按冲减口径重建：冲减行方向取反、金额取负，SQL 侧汇总与看板一致。
+    （schema.sql 里的原始定义被本函数覆盖；视图无其他使用方，仅作口径参考。）"""
+    try:
+        c.execute("DROP VIEW IF EXISTS v_month_agg")
+        c.execute("""CREATE VIEW v_month_agg AS
+                     SELECT entity, substr(txn_date,1,7) AS period,
+                            CASE WHEN IFNULL(offset_of,0)<>0
+                                 THEN CASE WHEN direction='收' THEN '支' ELSE '收' END
+                                 ELSE direction END AS direction,
+                            l1, l2, code, cf_section, cf_item,
+                            COUNT(*) AS n,
+                            SUM(CASE WHEN IFNULL(offset_of,0)<>0 THEN -amount ELSE amount END) AS amt
+                     FROM flow_raw WHERE status='confirmed'
+                     GROUP BY entity, period, direction, l1, l2, code, cf_section, cf_item""")
+    except Exception:
+        pass
 
 
 def restricted_kind_of(c, cp, memo, is_internal=0):
@@ -458,6 +927,8 @@ def _repair_dup(c, old, r, key):
     if old["balance"] is None and r.get("balance") is not None:
         sets.append("balance=?")
         vals.append(r.get("balance"))
+        sets.append("balance_date=?")
+        vals.append(r.get("balance_date") or None)
     # 旧版本把「收(付)方账号」当成「本方账号」落了库：这次本方账号识别为空、
     # 且旧值正好等于对方账号 → 清掉，避免账户表里出现一堆对方卡号
     acct = str(r.get("account") or "")
@@ -535,7 +1006,14 @@ def import_rows(batch_id, rows, operator="操作员", submit=True):
                                  "cp": r.get("cp", ""), "memo": r.get("memo", "")})
                 repaired += _repair_dup(c, old, r, key)
                 continue
-            code, rule_id, basis = classify(c, dir_, r.get("cp", ""), r.get("memo", ""), entity, amount)
+            off = try_offset(c, entity, dir_, r.get("cp", ""), r.get("memo", ""),
+                             amount, date, r.get("account", ""))
+            if off and off.get("id"):                 # 冲销命中：继承原笔科目，不走关键词规则
+                code, rule_id, basis = off["code"], None, off["note"]
+            elif off:                                 # 冲销候选但没匹配到原笔：留空待人工
+                code, rule_id, basis = None, None, "冲销候选未匹配原笔（%s），留空待人工" % off["kw"]
+            else:
+                code, rule_id, basis = classify(c, dir_, r.get("cp", ""), r.get("memo", ""), entity, amount, r.get("account", ""))
             if code not in sm_cache:
                 sm_cache[code] = c.execute("SELECT * FROM subject_map WHERE code=?", (code,)).fetchone() if code else None
             sm = sm_cache[code]
@@ -543,7 +1021,16 @@ def import_rows(batch_id, rows, operator="操作员", submit=True):
             rk = restricted_kind_of(c, r.get("cp", ""), r.get("memo", ""),
                                     (sm["is_internal"] if sm else 0) or 0)
             status = "draft" if not submit else ("confirmed" if code else "pending")
-            conf = "高" if code and rule_id else ("中" if code else "未知")
+            if off and off.get("id"):
+                conf = off["note"]
+            elif off:
+                conf = "待冲原笔"
+            elif code and rule_id:
+                conf = basis if str(basis or '').startswith('人工历史') else '高'
+            elif code:
+                conf = "中"
+            else:
+                conf = basis or "未知"
             bank = r.get("bank") or accmap.get((entity, r.get("account") or ""), "")
             if not bank and r.get("account"):
                 hit = acc_any.get(re.sub(r"\D", "", str(r.get("account"))))
@@ -554,15 +1041,16 @@ def import_rows(batch_id, rows, operator="操作员", submit=True):
             bank = bank or first_bank.get(entity, "")
             c.execute("""INSERT INTO flow_raw(batch_id,entity,bank,account,txn_date,txn_time,direction,amount,balance,
                           counterparty,cp_account,memo,code,l1,l2,sub_detail,cf_section,cf_item,matched_by,rule_id,confidence,
-                          restricted_kind,status,src_file,src_row,biz_key,created_at,updated_at)
-                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                          restricted_kind,status,src_file,src_row,biz_key,created_at,updated_at,offset_of,balance_date)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (batch_id, entity, bank, r.get("account", ""), date, r.get("time", ""),
                        dir_, amount, r.get("balance"),
                        r.get("cp", ""), r.get("cpa", ""), r.get("memo", ""),
                        code or "", sm["l1"] if sm else "", sm["l2"] if sm else "", sm["sub_detail"] if sm else "",
                        sm["cf_section"] if sm else "", sm["cf_item"] if sm else "",
-                       "rule" if code else "", rule_id, conf, rk, status,
-                       r.get("src", b["file_name"]), r.get("src_row") or i + 1, key, now(), now()))
+                       "offset" if (off and off.get("id")) else ("rule" if code else ""), rule_id, conf, rk, status,
+                       r.get("src", b["file_name"]), r.get("src_row") or i + 1, key, now(), now(),
+                       (off or {}).get("id"), r.get("balance_date") or None))
             inserted += 1
             if status == "pending":
                 pending += 1
@@ -632,34 +1120,44 @@ def _supersede_parent(c, b):
 
 
 def confirm_flows(ids, code, operator="操作员"):
-    """人工确认：事务内更新状态 + 反写规则 + 留痕 + 聚合刷新"""
+    """人工确认：事务内更新状态 + 反写 skill 规则 + 留痕 + 聚合刷新。
+
+    冲减行（offset_of 非 0）额外处理：确认时复核方向；不反写规则——退款对手方若反写成
+    「支→收入科目」的精确规则，下次真实付款会被错记成收入。"""
     c = conn()
     sm = c.execute("SELECT * FROM subject_map WHERE code=?", (code,)).fetchone()
     if not sm:
         c.close()
         return {"error": "科目编码不存在"}
-    done, rules_back, batches = 0, 0, set()
+    done, rules_back, batches, errors, rule_warnings = 0, 0, set(), [], []
     for fid in ids:
         f = c.execute("SELECT * FROM flow_raw WHERE id=?", (fid,)).fetchone()
         if not f:
             continue
         if f["status"] == "confirmed" and f["code"] == code:
             continue  # 已确认且科目未变，不重复确认、不改写 matched_by
+        is_off = int(f["offset_of"] or 0)
+        if is_off:
+            ok, why = offset_dir_ok(c, f, code)
+            if not ok:
+                errors.append("#%d %s" % (fid, why))
+                continue
         rk = restricted_kind_of(c, f["counterparty"], f["memo"], sm["is_internal"] or 0)
+        if is_off:
+            rk = ""
         c.execute("""UPDATE flow_raw SET code=?,l1=?,l2=?,sub_detail=?,cf_section=?,cf_item=?,restricted_kind=?,
-                     matched_by='manual',confidence='人工确认',status='confirmed',modified=0,updated_at=? WHERE id=?""",
-                  (code, sm["l1"], sm["l2"], sm["sub_detail"], sm["cf_section"], sm["cf_item"], rk, now(), fid))
+                     matched_by='manual',confidence=?,status='confirmed',modified=0,updated_at=? WHERE id=?""",
+                  (code, sm["l1"], sm["l2"], sm["sub_detail"], sm["cf_section"], sm["cf_item"], rk,
+                   "人工确认（冲减）" if is_off else "人工确认", now(), fid))
         c.execute("""INSERT INTO audit_log(target_type,target_id,action,field,before_val,after_val,operator,created_at)
                      VALUES('flow',?,'confirm','status,l2',?,?,?,?)""",
                   (fid, "%s/%s" % (f["status"], f["l2"] or ""), "confirmed/%s" % sm["l2"], operator, now()))
-        # 反写规则：用对手方做一条精确规则（低优先、可停用）
-        cp = (f["counterparty"] or "").strip()
-        if cp and len(cp) >= 4 and not c.execute(
-                "SELECT 1 FROM match_rule WHERE keyword=? AND code=? AND source='manual_back'", (re.escape(cp), code)).fetchone():
-            c.execute("""INSERT INTO match_rule(pri,direction,scope,keyword,code,enabled,source,hit_count,created_at)
-                         VALUES(0.45,?, 'cp', ?, ?, 1, 'manual_back', 0, ?)""",
-                      (f["direction"], re.escape(cp), code, now()))
-            rules_back += 1
+        # 反写技能规则：按公司/账户/方向 + 户名/摘要精确组合固化；冲减行不反写。
+        if not is_off:
+            learned = _backfill_manual_rule(c, f, code, operator)
+            rules_back += 1 if learned["learned"] else 0
+            if learned["error"]:
+                rule_warnings.append("#%d %s" % (fid, learned["error"]))
         if f["batch_id"]:
             batches.add(int(f["batch_id"]))
         done += 1
@@ -668,54 +1166,76 @@ def confirm_flows(ids, code, operator="操作员"):
     bump_agg(c)
     c.commit()
     c.close()
-    return {"confirmed": done, "rulesBack": rules_back}
-
+    return {"confirmed": done, "rulesBack": rules_back, "errors": errors, "ruleWarnings": rule_warnings}
 
 def save_flow_assignments(batch_id, items, operator="操作员"):
-    """人工识别「保存」：写科目与状态标记，不进看板实际数（仍为未确认）。
-    items = [{id, code}]，code='' 表示清空科目回到未识别。
+    """人工识别「保存」：写科目与冲减标记，不进看板实际数（仍为未确认）。
+    items = [{id, code, offset}]：
+      code=''   清空科目回到未识别（同时取消冲减）；
+      offset=1  按科目冲减（offset_of=-1），snapshot 会把该行方向取反、金额取负；
+      offset 缺省 = 不动库里的冲减标记（老前端、单条确认路径不受影响）。
 
     与单条「修改」同口径：
-      - 科目没有实际变化 → 不写、不标脏；已确认的仍是已确认
+      - 科目与冲减标记都没有实际变化 → 不写、不标脏；已确认的仍是已确认
         （不能因为点一次「保存」就把整批已确认记录变成「未确认（已修改）」）
-      - 已确认的行真的改了科目 → pending + modified=1，留痕，批次退回 parsed，重新确认才更新看板
-      - 未确认的行 → 只写科目，保持 pending
+      - 已确认的行真的改了 → pending + modified=1，留痕，批次退回 parsed，重新确认才更新看板
+      - 未确认的行 → 只写字段，保持 pending
+      - 冲减只允许反方向科目；方向不匹配就跳过并回一条错误，不静默写错
     """
     c = conn()
-    sm_cache, saved, changed, dirty_batches = {}, 0, 0, set()
+    sm_cache, saved, changed, dirty_batches, errors = {}, 0, 0, set(), []
     for it in items:
         fid, code = int(it["id"]), (it.get("code") or "").strip()
         f = c.execute("SELECT * FROM flow_raw WHERE id=?", (fid,)).fetchone()
         if not f:
             continue
+        old_offset = int(f["offset_of"] or 0)
+        new_offset = old_offset
+        if "offset" in it:
+            new_offset = OFFSET_BY_SUBJECT if it.get("offset") else 0
         if code:
             if code not in sm_cache:
                 sm_cache[code] = c.execute("SELECT * FROM subject_map WHERE code=?", (code,)).fetchone()
             sm = sm_cache[code]
             if not sm:
+                errors.append("#%d 科目不存在：%s" % (fid, code))
                 continue
             new_vals = (code, sm["l1"], sm["l2"], sm["sub_detail"], sm["cf_section"], sm["cf_item"])
         else:
             new_vals = ("", "", "", "", "", "")
+            new_offset = 0            # 清空科目即取消冲减，不留没有科目的冲减行
+        if new_offset:
+            ok, why = offset_dir_ok(c, f, new_vals[0])
+            if not ok:
+                errors.append("#%d %s（已跳过，未写入）" % (fid, why))
+                continue
         old_vals = (f["code"] or "", f["l1"] or "", f["l2"] or "", f["sub_detail"] or "",
                     f["cf_section"] or "", f["cf_item"] or "")
-        if new_vals == old_vals:
-            saved += 1          # 选的就是库里已有的科目：不写、不标脏
+        if new_vals == old_vals and new_offset == old_offset:
+            saved += 1          # 选的就是库里已有的科目/冲减标记：不写、不标脏
             continue
-        rk = restricted_kind_of(c, f["counterparty"], f["memo"], (sm["is_internal"] if code else 0) or 0)
+        rk = restricted_kind_of(c, f["counterparty"], f["memo"], (sm["is_internal"] if new_vals[0] else 0) or 0)
+        # 冲减行金额会被取负计入反方向，受限标签只对真实收支有意义 —— 冲减行不打受限
+        if new_offset:
+            rk = ""
         if f["status"] == "confirmed":
             c.execute("""UPDATE flow_raw SET code=?,l1=?,l2=?,sub_detail=?,cf_section=?,cf_item=?,restricted_kind=?,
-                         matched_by='manual', status='pending', modified=1, updated_at=? WHERE id=?""",
-                      new_vals + (rk, now(), fid))
+                         offset_of=?, matched_by='manual', status='pending', modified=1, updated_at=? WHERE id=?""",
+                      new_vals + (rk, new_offset or None, now(), fid))
             if f["batch_id"]:
                 dirty_batches.add(int(f["batch_id"]))
         else:
             c.execute("""UPDATE flow_raw SET code=?,l1=?,l2=?,sub_detail=?,cf_section=?,cf_item=?,restricted_kind=?,
-                         matched_by='manual', updated_at=? WHERE id=?""",
-                      new_vals + (rk, now(), fid))
+                         offset_of=?, matched_by='manual', updated_at=? WHERE id=?""",
+                      new_vals + (rk, new_offset or None, now(), fid))
         c.execute("""INSERT INTO audit_log(target_type,target_id,action,field,before_val,after_val,operator,created_at)
                      VALUES('flow',?,'edit','code/l2',?,?,?,?)""",
                   (fid, "%s/%s" % (old_vals[0], old_vals[2]), "%s/%s" % (new_vals[0], new_vals[2]), operator, now()))
+        if new_offset != old_offset:
+            c.execute("""INSERT INTO audit_log(target_type,target_id,action,field,before_val,after_val,operator,created_at)
+                         VALUES('flow',?,'edit','offset_of',?,?,?,?)""",
+                      (fid, "冲减" if old_offset else "正常记账", "冲减" if new_offset else "正常记账",
+                       operator, now()))
         saved += 1
         changed += 1
     # 已确认记录被改动 → 批次退回 parsed（与单条「修改」口径一致）并重算计数
@@ -726,8 +1246,7 @@ def save_flow_assignments(batch_id, items, operator="操作员"):
     bump_agg(c)
     c.commit()
     c.close()
-    return {"saved": saved, "changed": changed, "at": now()}
-
+    return {"saved": saved, "changed": changed, "errors": errors, "at": now()}
 
 def confirm_batch(batch_id, operator="操作员"):
     """「全部确认」：把本批所有「已识别」（code 非空）但未确认的记录整批置 confirmed。
@@ -739,7 +1258,7 @@ def confirm_batch(batch_id, operator="操作员"):
         return {"error": "批次不存在"}
     rows = [dict(r) for r in c.execute(
         "SELECT * FROM flow_raw WHERE batch_id=? AND status<>'confirmed' AND IFNULL(code,'')<>''", (batch_id,))]
-    done, rules_back = 0, 0
+    done, rules_back, rule_warnings = 0, 0, []
     for f in rows:
         sm = c.execute("SELECT * FROM subject_map WHERE code=?", (f["code"],)).fetchone()
         c.execute("""UPDATE flow_raw SET status='confirmed', modified=0, matched_by=?, updated_at=?
@@ -747,14 +1266,12 @@ def confirm_batch(batch_id, operator="操作员"):
         c.execute("""INSERT INTO audit_log(target_type,target_id,action,field,before_val,after_val,operator,created_at)
                      VALUES('flow',?,'confirm','status',?,?,?,?)""",
                   (f["id"], f["status"], "confirmed", operator, now()))
-        cp = (f["counterparty"] or "").strip()
-        if cp and len(cp) >= 4 and sm and not c.execute(
-                "SELECT 1 FROM match_rule WHERE keyword=? AND code=? AND source='manual_back'",
-                (re.escape(cp), f["code"])).fetchone():
-            c.execute("""INSERT INTO match_rule(pri,direction,scope,keyword,code,enabled,source,hit_count,created_at)
-                         VALUES(0.45,?, 'cp', ?, ?, 1, 'manual_back', 0, ?)""",
-                      (f["direction"], re.escape(cp), f["code"], now()))
-            rules_back += 1
+        # 只沉淀人工分类；规则已命中的行无需把每笔都复制为精确规则。
+        if f["matched_by"] == "manual" and sm and not int(f["offset_of"] or 0):
+            learned = _backfill_manual_rule(c, f, f["code"], operator)
+            rules_back += 1 if learned["learned"] else 0
+            if learned["error"]:
+                rule_warnings.append("#%d %s" % (f["id"], learned["error"]))
         done += 1
     left = c.execute("SELECT COUNT(*) n FROM flow_raw WHERE batch_id=? AND status<>'confirmed'",
                      (batch_id,)).fetchone()["n"]
@@ -772,7 +1289,8 @@ def confirm_batch(batch_id, operator="操作员"):
     bump_agg(c)
     c.commit()
     c.close()
-    return {"confirmed": done, "remaining": left, "status": st, "rulesBack": rules_back, "at": now()}
+    return {"confirmed": done, "remaining": left, "status": st, "rulesBack": rules_back,
+            "ruleWarnings": rule_warnings, "at": now()}
 
 
 def batch_status(batch_id):
@@ -811,10 +1329,10 @@ def flow_change(batch_id, operator="操作员"):
     nid = c.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
     c.execute("""INSERT INTO flow_raw(batch_id,entity,bank,account,txn_date,txn_time,direction,amount,balance,
                  counterparty,cp_account,memo,code,l1,l2,sub_detail,cf_section,cf_item,matched_by,rule_id,confidence,
-                 status,modified,src_file,src_row,biz_key,created_at,updated_at)
+                 status,modified,src_file,src_row,biz_key,created_at,updated_at,balance_date)
                  SELECT ?,entity,bank,account,txn_date,txn_time,direction,amount,balance,
                  counterparty,cp_account,memo,code,l1,l2,sub_detail,cf_section,cf_item,matched_by,rule_id,confidence,
-                 'pending',0,src_file,src_row,IFNULL(biz_key,'')||':chg'||?,?,?
+                 'pending',0,src_file,src_row,IFNULL(biz_key,'')||':chg'||?,?,?,balance_date
                  FROM flow_raw WHERE batch_id=?""", (nid, nid, now(), now(), batch_id))
     c.execute("""INSERT INTO audit_log(target_type,target_id,action,operator,reason,created_at)
                  VALUES('import_batch',?,'change',?,?,?)""",
@@ -826,24 +1344,49 @@ def flow_change(batch_id, operator="操作员"):
 
 
 def edit_flow(fid, patch, operator="操作员", reason=""):
+    """单条修改：科目/金额/日期等，并支持带冲减标记（patch.offset）。
+    patch.offset=true → offset_of=-1（按科目冲减）；false → 取消冲减。
+    冲减与「保存」同口径校验：只能冲反方向科目，方向不符直接返回错误、不写库。"""
     c = conn()
     f = c.execute("SELECT * FROM flow_raw WHERE id=?", (fid,)).fetchone()
     if not f:
         c.close()
         return {"error": "流水不存在"}
     fields = [k for k in ("txn_date", "direction", "amount", "counterparty", "memo", "code", "l1", "l2") if k in patch]
+    old_off = int(f["offset_of"] or 0)
+    new_off = old_off
+    if "offset" in patch:
+        new_off = OFFSET_BY_SUBJECT if patch.get("offset") else 0
+    if new_off:
+        probe = {"direction": patch.get("direction", f["direction"]),
+                 "amount": patch.get("amount", f["amount"])}
+        ok, why = offset_dir_ok(c, probe, patch.get("code") or f["code"] or "")
+        if not ok:
+            c.close()
+            return {"error": why}
     for k in fields:
         c.execute("INSERT INTO audit_log(target_type,target_id,action,field,before_val,after_val,operator,reason,created_at)"
                   " VALUES('flow',?, 'edit', ?, ?, ?, ?, ?, ?)",
                   (fid, k, str(f[k]), str(patch[k]), operator, reason, now()))
+    if new_off != old_off:
+        c.execute("INSERT INTO audit_log(target_type,target_id,action,field,before_val,after_val,operator,reason,created_at)"
+                  " VALUES('flow',?, 'edit', 'offset_of', ?, ?, ?, ?, ?)",
+                  (fid, "冲减" if old_off else "正常记账", "冲减" if new_off else "正常记账", operator, reason, now()))
     sets = ", ".join("%s=?" % k for k in fields)
     vals = [patch[k] for k in fields]
+    if new_off != old_off or "offset" in patch:
+        sets = (sets + ", " if sets else "") + "offset_of=?"
+        vals.append(new_off or None)
+    if not sets:
+        c.close()
+        return {"ok": True, "fields": [], "offset": bool(new_off)}
     c.execute("UPDATE flow_raw SET %s, status='pending', modified=1, updated_at=? WHERE id=?" % sets, vals + [now(), fid])
-    # 摘要/对方/科目改动后重算受限标签
+    # 摘要/对方/科目改动后重算受限标签（冲减行不打受限）
     g = c.execute("SELECT * FROM flow_raw WHERE id=?", (fid,)).fetchone()
     smk = c.execute("SELECT is_internal FROM subject_map WHERE code=?", (g["code"] or "",)).fetchone()
+    rk = restricted_kind_of(c, g["counterparty"], g["memo"], (smk["is_internal"] if smk else 0) or 0)
     c.execute("UPDATE flow_raw SET restricted_kind=? WHERE id=?",
-              (restricted_kind_of(c, g["counterparty"], g["memo"], (smk["is_internal"] if smk else 0) or 0), fid))
+              ("" if new_off else rk, fid))
     # 已确认批次里做了修改 → 批次退回 parsed（等待重新确认），申请层面恢复可编辑提示
     if f["batch_id"]:
         c.execute("UPDATE import_batch SET status=CASE WHEN status='confirmed' THEN 'parsed' ELSE status END, "
@@ -853,14 +1396,33 @@ def edit_flow(fid, patch, operator="操作员", reason=""):
     bump_agg(c)
     c.commit()
     c.close()
-    return {"ok": True, "fields": fields}
+    return {"ok": True, "fields": fields, "offset": bool(new_off)}
 
 
-# ---------------------------------------------------------------- 计划
-# 状态机：parsed（可编辑）→ submitted（审批中，可撤回）→ approved（已入数仓）
-#         approved 之后要改 → 发起「变更」生成 version+1 的新批次（parsed），旧版继续生效到新版审批通过
-PLAN_EDITABLE = ("parsed", "rejected")
-
+def set_flow_offset(fid, code=None, offset=True, operator="操作员"):
+    """单条设置 / 取消「按科目冲减」（offset_of=-1，不挂原笔）。
+    code 为空时沿用该行现有科目；取消冲减只清标记，不动科目。
+    走 save_flow_assignments 同一条写入路径，留痕与批次回退口径一致。"""
+    c = conn()
+    f = c.execute("SELECT * FROM flow_raw WHERE id=?", (fid,)).fetchone()
+    c.close()
+    if not f:
+        return {"error": "流水不存在"}
+    if not offset:
+        if not int(f["offset_of"] or 0):
+            return {"ok": True, "id": fid, "offset": False, "code": f["code"] or "", "changed": 0}
+        r = save_flow_assignments(f["batch_id"] or 0,
+                                  [{"id": fid, "code": f["code"] or "", "offset": False}], operator)
+        if r.get("errors"):
+            return {"error": "；".join(r["errors"])}
+        return {"ok": True, "id": fid, "offset": False, "code": f["code"] or "", "changed": r.get("changed", 0)}
+    want = (code or f["code"] or "").strip()
+    if not want:
+        return {"error": "冲减需要先指定冲减科目（要冲到哪个科目）"}
+    r = save_flow_assignments(f["batch_id"] or 0, [{"id": fid, "code": want, "offset": True}], operator)
+    if r.get("errors"):
+        return {"error": "；".join(r["errors"])}
+    return {"ok": True, "id": fid, "offset": True, "code": want, "changed": r.get("changed", 0)}
 
 def _plan_totals(rows):
     inflow = sum(float(r["amount"]) for r in rows if r["direction"] == "流入")
@@ -1162,7 +1724,9 @@ def meta():
         "subjectMap": [dict(r) for r in c.execute("SELECT * FROM subject_map ORDER BY code")],
         "fx": fx_all(),
         "aggAt": (c.execute("SELECT v FROM agg_meta WHERE k='agg_at'").fetchone() or {"v": ""})["v"],
-        "rules": [dict(r) for r in c.execute("SELECT id,pri,direction,scope,keyword,code,enabled,source,hit_count FROM match_rule ORDER BY pri LIMIT 400")],
+        "rules": [dict(r) for r in c.execute("SELECT id,pri,direction,scope,keyword,memo_pattern,code,enabled,source,hit_count,entity,account,rule_key FROM match_rule ORDER BY pri LIMIT 400")],
+        "rulesVersion": (c.execute("SELECT v FROM agg_meta WHERE k='rulebook_version'").fetchone() or {"v": ""})["v"],
+        "rulesSyncedAt": (c.execute("SELECT v FROM agg_meta WHERE k='rulebook_synced_at'").fetchone() or {"v": ""})["v"],
         "batches": _seq_list(c, "import_batch"),
         "planBatches": _seq_list(c, "plan_batch"),
         "safeLines": {r["entity"]: r["safe_line"] for r in c.execute("SELECT * FROM entity_rule")},
@@ -1255,6 +1819,15 @@ def snapshot(entity="ALL", period="YTD"):
                 r["fx"] = None
                 missing_fx.add(ccy)
 
+    # 冲销行：科目继承原笔，方向取反、金额取负 —— 净额自然抵减，不用改前端求和
+    for r in rows:
+        if r.get("offset_of"):
+            r["is_offset"] = 1
+            r["raw_direction"] = r["direction"]
+            r["direction"] = "支" if r["direction"] == "收" else "收"
+            if r["amt_cny"] is not None:
+                r["amt_cny"] = -abs(r["amt_cny"])
+
     # 内部往来标识一律取映射表（前端不硬编码 l1 判断）
     smflag = {r["code"]: (r["is_internal"] or 0, r["group_elim"] or 0)
               for r in c.execute("SELECT code,is_internal,group_elim FROM subject_map")}
@@ -1273,7 +1846,7 @@ def snapshot(entity="ALL", period="YTD"):
 
     # 余额：每账户期间末最后一条带余额的流水
     bal = {}
-    for r in c.execute("SELECT entity,bank,account,txn_date,balance FROM flow_raw WHERE status='confirmed' AND balance IS NOT NULL ORDER BY txn_date, id"):
+    for r in c.execute("SELECT entity,bank,account,COALESCE(NULLIF(balance_date,''),txn_date) AS txn_date,balance FROM flow_raw WHERE status='confirmed' AND balance IS NOT NULL ORDER BY COALESCE(NULLIF(balance_date,''),txn_date), id"):
         if start and r["txn_date"][:7] > end:
             continue
         bal[(r["entity"], r["bank"], r["account"])] = r
@@ -1378,19 +1951,19 @@ def pending_flows(entity, period="ALL"):
         sql += " AND substr(txn_date,1,7) BETWEEN ? AND ?"
         args += [start, end]
     rows = [dict(r) for r in c.execute(sql + " ORDER BY txn_date DESC, id DESC LIMIT 500", args)]
+    offset_hint(c, rows)      # 冲减标记 + 同对方历史科目推测
     c.close()
     return rows
-
 
 def batch_rows(bid):
     c = conn()
     rows = [dict(r) for r in c.execute("SELECT * FROM flow_raw WHERE batch_id=? ORDER BY txn_date, id", (bid,))]
     smflag = {r["code"]: r["is_internal"] or 0 for r in c.execute("SELECT code,is_internal FROM subject_map")}
+    offset_hint(c, rows)      # 冲减标记 + 同对方历史科目推测
     c.close()
     for r in rows:
         r["is_internal"] = smflag.get(r["code"] or "", 0)
     return rows
-
 
 def flows_by_ids(ids):
     if not ids:

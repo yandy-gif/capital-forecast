@@ -57,18 +57,22 @@ CREATE TABLE IF NOT EXISTS subject_map (
   sort        INTEGER DEFAULT 0
 );
 
--- 匹配规则：人工确认时反写（source=manual_back）
+-- 匹配规则：技能规则库同步；人工确认优先沉淀回规则库，写失败时才临时反写（source=manual_back）
 CREATE TABLE IF NOT EXISTS match_rule (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   pri        REAL NOT NULL,
   direction  TEXT DEFAULT '*',      -- 收/支/*
-  scope      TEXT DEFAULT 'any',    -- cp / any / person
-  keyword    TEXT NOT NULL,
+  scope      TEXT DEFAULT 'any',    -- cp / memo / any / person / both
+  keyword    TEXT NOT NULL,         -- both 时为对方户名 pattern
+  memo_pattern TEXT DEFAULT '',     -- both 时必须同时命中的摘要 pattern
   code       TEXT NOT NULL,
   enabled    INTEGER DEFAULT 1,
   source     TEXT DEFAULT 'skill',  -- skill / manual_back
   hit_count  INTEGER DEFAULT 0,
   last_hit   TEXT,
+  entity     TEXT DEFAULT '*',      -- 主体简称；'*' 不限，逗号分隔
+  account    TEXT DEFAULT '*',      -- 本方账号；'*' 不限，支持 * 通配
+  rule_key   TEXT,                  -- 规则库 id（rules.json 的 id）
   created_at TEXT
 );
 
@@ -116,6 +120,7 @@ CREATE TABLE IF NOT EXISTS flow_raw (
   direction    TEXT NOT NULL,        -- 收/支
   amount       REAL NOT NULL,
   balance      REAL,
+  balance_date TEXT,                 -- 余额时点；为空时使用交易日期
   counterparty TEXT,
   cp_account   TEXT,
   memo         TEXT,
@@ -131,6 +136,7 @@ CREATE TABLE IF NOT EXISTS flow_raw (
   status       TEXT DEFAULT 'pending',-- draft / pending / confirmed
   modified     INTEGER DEFAULT 0,    -- 1 = 确认后被改过，待重确认
   restricted_kind TEXT,              -- 受限资金类别（自动识别，空=不受限）
+  offset_of      INTEGER,             -- 冲销指向的原笔 flow_raw.id
   src_file     TEXT,
   src_row      INTEGER,
   biz_key      TEXT,                 -- 去重键

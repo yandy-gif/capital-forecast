@@ -23,6 +23,7 @@ const S = {
   sel: new Set(),
   editId: null,
   drillAct: '', drillCat: '', drillSrc: '', drillDir2: 'both', drillMonth: 'ALL', drillAmt: 0,
+  vaGrain: 'month',
   err: ''
 };
 
@@ -43,6 +44,7 @@ function pctTxt(v, d = 1) { return v == null || isNaN(v) ? '—' : (v > 0 ? '+' 
 function mom(cur, prev) {
   if (prev == null || !isFinite(prev) || prev === 0 || !isFinite(cur)) return { txt: '—', cls: '' };
   const r = (cur - prev) / Math.abs(prev) * 100;
+  if (Math.abs(r) >= 1000) return { txt: '变动 ' + (cur - prev >= 0 ? '+' : '−') + big(Math.abs(cur - prev)) + '元（上期基数小）', cls: '', v: r };
   return { txt: (r >= 0 ? '▲ ' : '▼ ') + Math.abs(r).toFixed(1) + '%', cls: r >= 0 ? 'up' : 'down', v: r };
 }
 const momHtml = (cur, prev) => { const m = mom(cur, prev); return `<span class="s ${m.cls}">${m.txt}</span>`; };
@@ -102,7 +104,7 @@ const PERIOD_LABEL = p => ({
 }[p] || (p || '').replace('-', ' 年 ') + ' 月');
 function periodOptions(cur) {
   const months = (S.snap ? S.snap.allMonths : []).slice().reverse();
-  const y = (months[0] || '').slice(0, 4);
+  const y = (S.snap?.months?.at(-1) || months[0] || '').slice(0, 4);
   return `<optgroup label="快捷口径">
     <option value="CUR"${cur === 'CUR' ? ' selected' : ''}>当月</option>
     <option value="L3M"${cur === 'L3M' ? ' selected' : ''}>近 3 个月</option>
@@ -149,10 +151,11 @@ function rowsByMonth(m) { return rows().filter(r => r.txn_date.slice(0, 7) === m
 function balancesAt(monthEnd) {
   const map = new Map();
   rows().concat().forEach(r => {
-    if (r.balance == null || r.txn_date > monthEnd) return;
+    const date = r.balance_date || r.txn_date;
+    if (r.balance == null || date.slice(0, 7) > monthEnd.slice(0, 7)) return;
     const k = r.entity + '|' + r.bank + '|' + (r.account || '');
     const old = map.get(k);
-    if (!old || (r.txn_date + r.id) > (old.txn_date + old.id)) map.set(k, r);
+    if (!old || (date + r.id) > ((old.balance_date || old.txn_date) + old.id)) map.set(k, r);
   });
   let total = 0, missing = [];
   const seen = new Set();
@@ -165,28 +168,45 @@ function balancesAt(monthEnd) {
   accounts().forEach(a => { if (!seen.has(a.entity) && !E().find(e => e.short === a.entity && e.pending)) missing.push(a.entity); });
   return { total, missing: Array.from(new Set(missing)) };
 }
+function accountNumber(value) {
+  const number = String(value ?? '').trim();
+  return /^(?:[（(]?(?:待补登|待补录|待核对|未登记|未提供)[）)]?|[-—–]+)$/.test(number) ? '' : number;
+}
+const accountKey = r => JSON.stringify([r.entity, r.bank || '', accountNumber(r.account)]);
+function newerBalance(row, previous) {
+  if (!previous) return true;
+  const date = row.balance_date || row.txn_date, oldDate = previous.balance_date || previous.txn_date;
+  if (date !== oldDate) return date > oldDate;
+  const time = row.txn_time || '', oldTime = previous.txn_time || '';
+  return time === oldTime ? Number(row.id) > Number(previous.id) : time > oldTime;
+}
+
 function accountRows() {
-  const last = new Map(), opening = new Map();
+  const last = new Map();
   // 受限资金自动识别结果（按 主体|银行|账号 汇总，单位人民币）
   const autoRestr = new Map();
-  ((((S.full || S.snap) || {}).restricted || {}).accounts || []).forEach(a => {
-    const k = a.entity + '|' + (a.bank || '') + '|' + (a.account || '');
+  ((((S.snap || S.full) || {}).restricted || {}).accounts || []).forEach(a => {
+    const k = accountKey(a);
     autoRestr.set(k, (autoRestr.get(k) || 0) + (a.amt || 0));
   });
-  rows().forEach(r => {
+  ((((S.full || S.snap) || {}).rows) || []).forEach(r => {
     if (r.balance == null) return;
-    const k = r.entity + '|' + r.bank + '|' + (r.account || '');
-    const cur = last.get(k);
-    if (!cur || (r.txn_date + r.id) > (cur.txn_date + cur.id)) last.set(k, r);
-    const f = opening.get(k);
-    if (!f || (r.txn_date + r.id) < (f.txn_date + f.id)) opening.set(k, r);
+    const balanceMonth = (r.balance_date || r.txn_date || '').slice(0, 7);
+    if (S.snap && S.snap.end && balanceMonth > S.snap.end) return;
+    const k = accountKey(r);
+    if (newerBalance(r, last.get(k))) last.set(k, r);
   });
   const out = [];
-  const keys = new Set(Array.from(last.keys()).concat(accounts().map(a => a.entity + '|' + a.bank + '|' + (a.account || ''))));
+  const master = new Map();
+  accounts().forEach(a => {
+    const key = accountKey(a), previous = master.get(key);
+    // 待补登和空号是同一银行的未识别记录；补录仍指向原台账键。
+    if (!previous || (!previous.restricted && a.restricted)) master.set(key, a);
+  });
+  const keys = new Set([...last.keys(), ...master.keys()]);
   keys.forEach(k => {
-    const [e, b, ac] = k.split('|');
-    const l = last.get(k), f = opening.get(k);
-    const meta = accounts().find(a => a.entity === e && a.bank === b && (a.account || '') === ac) || {};
+    const [e, b, ac] = JSON.parse(k);
+    const l = last.get(k), meta = master.get(k) || {};
     const ccy = ENT(e).ccy || 'CNY', fx = ccy === 'CNY' ? 1 : (fxOf(ccy) ? fxOf(ccy).rate : null);
     const bal = l ? l.balance : null;
     const auto = autoRestr.get(k) || 0;                    // 自动识别受限（人民币）
@@ -195,8 +215,8 @@ function accountRows() {
     // 可用：先扣自动识别；该账户没有自动识别结果时才扣人工补录，避免同一笔重复扣减
     const avail = bal == null ? null : bal - autoLocal - (auto > 0 ? 0 : manual);
     out.push({
-      entity: e, bank: b, account: ac, ccy, fx,
-      balance: bal, date: l ? l.txn_date : '',
+      entity: e, bank: b, account: ac, ccy, fx, masterAccount: meta.account == null ? null : meta.account,
+      balance: bal, date: l ? (l.balance_date || l.txn_date) : '',
       restricted: manual,
       autoRestricted: auto,
       available: avail,
@@ -226,6 +246,8 @@ const FLOW_ALIAS = {
   amtIn: ['贷方金额', '收入金额', '存入金额', '贷方发生额'],
   amtOut: ['借方金额', '支出金额', '支取金额', '借方发生额'],
   bal: ['余额', '账户余额', '交易后余额'],
+  balDate: ['余额日期'],
+  bank: ['银行'],
   cp: ['对方户名', '收(付)方名称', '收付方名称', '对方名称', '对方单位', '对方单位名称', '对手方名称',
        '对方账户名称', '交易对手', '付款方名称', '收款方名称', '对方户名全称'],
   cpa: ['对方账号', '收(付)方账号', '收付方账号', '对方帐号', '对方账户', '收(付)方账户', '收付方账户', '对方卡号'],
@@ -328,6 +350,12 @@ async function readFileRows(file) {
   const u8 = new Uint8Array(buf.slice(0, 4));
   const isZip = u8[0] === 0x50 && u8[1] === 0x4B;              // xlsx / xlsm
   const isOle = u8[0] === 0xD0 && u8[1] === 0xCF;              // .xls (BIFF8)
+  if (/\.pdf$/i.test(file.name) || (u8[0] === 0x25 && u8[1] === 0x50 && u8[2] === 0x44 && u8[3] === 0x46)) {
+    const r = await api('/api/parse-pdf', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf });
+    if (r.error) throw new Error(r.error);
+    r.rows.pdfInfo = { owner: r.owner, currency: r.currency, warnings: r.warnings || [] };
+    return r.rows;
+  }
   if (isZip) return (await readXlsx(buf)).rows;
   const head = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(buf.slice(0, 400))).toLowerCase();
   if (isOle || /\.xls$/i.test(file.name) || head.includes('<html') || head.includes('<table')) {
@@ -435,8 +463,9 @@ function parseFlowFile(rowsArr, fileName, entity) {
     out.push({
       date: d, time: (/\d{1,2}:\d{2}(?::\d{2})?/.exec(String(cellAt(r, m.time))) || [''])[0], dir,
       amount: Math.abs(amt), balance: isNaN(bal) ? null : bal,
+      balance_date: normDate(cellAt(r, m.balDate)) || '',
       cp, cpa: String(cellAt(r, m.cpa)), memo,
-      entity, bank: '', account: String(cellAt(r, m.acct)), src: fileName, src_row: i + 1
+      entity, bank: String(cellAt(r, m.bank)), account: String(cellAt(r, m.acct)), src: fileName, src_row: i + 1
     });
   }
   return { rows: out, headerIdx: hi, dupInFile };

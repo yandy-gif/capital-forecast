@@ -23,6 +23,7 @@ node_modules/
 __pycache__/
 *.py[cod]
 .venv/
+.pnpm-store/
 venv/
 *.log
 *.pid
@@ -40,9 +41,11 @@ _local_backup_*/
 
 # v11 本地业务种子与工作库（含真实流水/主体，不入库）
 数仓/v11/seed.json
+数仓/v11/extract_seed.py
 数仓/v11/warehouse_v11.db*
 数仓/v11/*.bak*
 
 # v11 调试脚本与本地备份（无头浏览器探针、服务端旧备份，不入库）
 数仓/v11/*.mjs
 数仓/tmp_server_bak.py
+h.textContent*
